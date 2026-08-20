@@ -5,16 +5,31 @@
   <title>氛圍閱讀 — 設定</title>
   <style>
     body { font: 15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; background: #1f2430; color: #e6e6e6; margin: 0; padding: 28px; }
-    .card { max-width: 560px; margin: 0 auto; background: #262c3a; border: 1px solid #3a4150; border-radius: 12px; padding: 24px 28px; }
+    .card { max-width: 760px; margin: 0 auto 18px; background: #262c3a; border: 1px solid #3a4150; border-radius: 12px; padding: 24px 28px; }
     h1 { font-size: 18px; margin: 0 0 4px; }
+    h2 { font-size: 16px; margin: 0 0 4px; }
     .sub { color: #9fb3c8; margin: 0 0 20px; font-size: 13px; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 0; border-top: 1px solid #333b4a; }
     .row:first-of-type { border-top: 0; }
+    .stack { padding: 14px 0; border-top: 1px solid #333b4a; }
     label { font-weight: 600; }
     .hint { color: #9fb3c8; font-size: 12px; margin-top: 4px; }
-    select { background: #2b3140; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 8px; padding: 6px 10px; font: inherit; }
+    .notice { background: #202634; border: 1px solid #3a4150; border-radius: 8px; padding: 12px 14px; margin: 12px 0; font-size: 13px; }
+    .warning { color: #e9c46a; }
+    select, input[type="url"], textarea, button {
+      background: #2b3140; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 8px; padding: 7px 10px; font: inherit;
+    }
+    input[type="url"], textarea { width: 100%; box-sizing: border-box; }
+    textarea { min-height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
     input[type="checkbox"] { width: 18px; height: 18px; }
-    .saved { color: #5fd38b; font-size: 13px; height: 18px; margin-top: 6px; }
+    input[type="file"] { max-width: 100%; }
+    button { cursor: pointer; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .saved { color: #5fd38b; font-size: 13px; min-height: 18px; margin-top: 8px; }
+    .status-err { color: #ff8a8a; }
+    code { color: #c9d7e5; }
+    .glossary-body[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -38,12 +53,81 @@
     <div class="row">
       <div>
         <label for="showBall">在網頁顯示懸浮球</label>
-        <div class="hint">常駐右下角的翻譯球（點擊＝整頁翻譯，預設開啟懸停翻譯）。關閉後仍可用工具列圖示／<code>Alt+T</code>／右鍵選單翻譯。</div>
+        <div class="hint">常駐右下角的翻譯球。關閉後仍可用工具列圖示／<code>Alt+T</code>／右鍵選單翻譯。</div>
       </div>
       <input type="checkbox" id="showBall">
     </div>
 
     <div class="saved" id="saved"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <h2>專業辭庫（選用）</h2>
+        <div class="hint">相容於 Immersive Translate terms 的 <code>source,target,tgt_lng</code> CSV 格式。可自行載入檔案，或指定資料網址自動動態匯入。</div>
+      </div>
+      <input type="checkbox" id="glossaryEnabled" aria-label="啟用專業辭庫">
+    </div>
+
+    <div id="glossaryBody" class="glossary-body" hidden>
+      <div class="notice">
+        此功能<strong>預設關閉</strong>。Vibe Reading 只負責讀取與套用你指定的辭庫資料，不內建、轉授權或保證任何第三方辭庫。
+        若使用第三方來源（包含 Immersive Translate terms 相容資料），請自行確認來源、授權、內容正確性與持續可用性。
+      </div>
+
+      <div class="stack">
+        <label>方法 A：載入本機 CSV</label>
+        <div class="hint">適合固定版本或自行維護的辭庫。選取後會把內容儲存在本機 Chrome storage。</div>
+        <div class="actions">
+          <input type="file" id="glossaryFile" accept=".csv,text/csv,text/plain">
+        </div>
+      </div>
+
+      <div class="stack">
+        <label for="glossaryCsv">方法 B：直接貼上 CSV</label>
+        <div class="hint">第一列至少需包含 <code>source,target</code>；建議包含 <code>tgt_lng</code>。空白或 <code>auto</code> 表示所有目標語言。</div>
+        <textarea id="glossaryCsv" spellcheck="false" placeholder="source,target,tgt_lng&#10;Algorithm,演算法,zh-TW&#10;Machine Learning,機器學習,zh-TW"></textarea>
+        <div class="actions">
+          <button id="saveGlossaryCsv" type="button">儲存貼上內容</button>
+          <button id="clearGlossaryCsv" type="button">清除辭庫內容</button>
+        </div>
+      </div>
+
+      <div class="stack">
+        <label for="glossarySourceUrl">方法 C：設定辭庫資料網址</label>
+        <div class="hint">
+          貼入可直接下載 CSV 文字內容的網址（例如 GitHub Raw URL）。Vibe Reading 不會替你自動選擇第三方辭庫。
+          遠端來源僅允許 HTTPS；本機開發可用 localhost / 127.0.0.1。
+        </div>
+        <input type="url" id="glossarySourceUrl" placeholder="https://example.com/path/glossary_zh-TW.csv">
+
+        <div class="notice warning">
+          <label style="font-weight: 500;">
+            <input type="checkbox" id="glossarySourceConfirmed">
+            我了解並確認：這個網址與資料內容是由我自行指定；我會自行確認第三方資料的授權、可信度與使用責任。
+          </label>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="glossaryAutoSync">自動動態匯入</label>
+            <div class="hint">啟用後，在需要翻譯時最多每 24 小時重新抓取一次；抓取失敗會沿用上次成功快取。</div>
+          </div>
+          <input type="checkbox" id="glossaryAutoSync">
+        </div>
+
+        <div class="actions">
+          <button id="syncGlossaryNow" type="button">測試網址並立即匯入</button>
+        </div>
+        <div class="saved" id="glossaryStatus"></div>
+      </div>
+
+      <div class="notice">
+        <strong>Immersive Translate terms 相容方式</strong><br>
+        將你要使用的相容 CSV「原始檔網址」貼到上方即可；Vibe Reading 只採用其資料格式相容設計，不會預設連線、預載或自動下載任何第三方詞庫。
+      </div>
+    </div>
   </div>
 
   <script src="options.js"></script>
