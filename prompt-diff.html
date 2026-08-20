@@ -23,42 +23,47 @@
     button { cursor: pointer; }
     button:hover { border-color: #6f7b93; }
     textarea { width: 100%; min-height: 230px; padding: 12px; resize: vertical; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    input[type="checkbox"] { width: 18px; height: 18px; }
     .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .card { padding: 14px; min-width: 0; }
+    .card { padding: 14px; min-width: 0; margin-bottom: 14px; }
     .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
     .badge { padding: 2px 7px; border: 1px solid #475064; border-radius: 999px; color: #b8c8da; font-size: 12px; }
     .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
-    .metric { background: #262c3a; border: 1px solid #3a4150; border-radius: 10px; padding: 10px; }
-    .metric strong { display: block; font-size: 18px; }
+    .metric { background: #262c3a; border: 1px solid #3a4150; border-radius: 10px; padding: 10px; min-width: 0; }
+    .metric strong { display: block; font-size: 18px; overflow: hidden; text-overflow: ellipsis; }
     .metric span { color: #9fb3c8; font-size: 12px; }
+    .route-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0 0; }
     .diff-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
     .diff-pane { min-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     .same { color: inherit; }
     .del { background: rgba(255, 110, 110, .18); text-decoration: line-through; text-decoration-thickness: 1px; }
     .add { background: rgba(95, 211, 139, .18); }
-    .unified { margin-top: 14px; }
     .unified .diff-pane { min-height: 120px; }
     .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 0; color: #9fb3c8; font-size: 12px; }
     .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
     .legend .l-del { background: rgba(255, 110, 110, .28); }
     .legend .l-add { background: rgba(95, 211, 139, .28); }
-    .analysis { margin-top: 14px; }
     .rule-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
     .rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 9px 10px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; }
     .yes { color: #75d69a; }
     .no { color: #9aa8b8; }
     .status { min-height: 20px; color: #9fb3c8; margin-top: 10px; }
+    .debug-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+    .check-row { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; font-weight: 500; }
+    .route-note { margin-top: 10px; padding: 10px 12px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; color: #c9d7e5; }
+    .matched-list { margin: 8px 0 0; padding-left: 18px; color: #c9d7e5; }
+    .matched-list:empty { display: none; }
     @media (max-width: 760px) {
       body { padding: 14px; }
       .grid, .diff-grid, .rule-list { grid-template-columns: 1fr; }
-      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metrics, .route-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
 <body>
   <main class="wrap">
     <h1>Prompt Diff Lab／提示詞差異工具</h1>
-    <p class="sub">比較 Vibe Reading 原版與目前修正版 Gemini system prompt，也可貼入任意兩版 prompt。全部在本機瀏覽器處理，不呼叫 AI。</p>
+    <p class="sub">比較 Vibe Reading 原版與目前修正版 Gemini system prompt，也可貼入任意兩版 prompt。Diff 本身完全在本機處理；下方 Engine Mode 是全域翻譯測試設定。</p>
 
     <section class="toolbar" aria-label="比較設定">
       <div class="control">
@@ -75,6 +80,32 @@
       <button id="loadBuiltin" type="button">載入原版 vs 現行版</button>
       <button id="swapPrompts" type="button">交換左右</button>
       <button id="clearPrompts" type="button">清空</button>
+    </section>
+
+    <section class="card" aria-label="翻譯路由測試">
+      <div class="head"><h2>Translation Routing／翻譯引擎測試</h2><span class="hint">會影響整個 Vibe Reading extension</span></div>
+      <div class="debug-row">
+        <div class="control">
+          <label for="engineMode">Engine Mode</label>
+          <select id="engineMode"></select>
+        </div>
+        <label class="check-row"><input id="diagnosticsVerbose" type="checkbox"> 在翻譯狀態列顯示診斷</label>
+        <button id="refreshDiagnostics" type="button">重新讀取診斷</button>
+        <button id="clearDiagnostics" type="button">清除診斷</button>
+      </div>
+      <div class="route-note" id="routingExplanation">Auto：無辭庫命中時優先 Translator；命中術語時改走 Gemini，Gemini 不可用才退回 Translator placeholder。</div>
+      <div class="metrics route-metrics" aria-label="翻譯診斷">
+        <div class="metric"><strong id="diagMode">—</strong><span>Mode</span></div>
+        <div class="metric"><strong id="diagRoute">—</strong><span>Base → Effective</span></div>
+        <div class="metric"><strong id="diagLoaded">0</strong><span>Glossary Loaded</span></div>
+        <div class="metric"><strong id="diagMatched">0</strong><span>Matched</span></div>
+        <div class="metric"><strong id="diagApplied">0</strong><span>Applied</span></div>
+        <div class="metric"><strong id="diagGlossary">—</strong><span>Glossary</span></div>
+        <div class="metric"><strong id="diagTarget">—</strong><span>Target</span></div>
+        <div class="metric"><strong id="diagFallback">—</strong><span>Fallback</span></div>
+      </div>
+      <div class="hint" id="diagTime">尚未收到翻譯診斷。請在另一個頁面或 PDF 執行一次翻譯。</div>
+      <ul class="matched-list" id="matchedTerms"></ul>
     </section>
 
     <section class="grid">
