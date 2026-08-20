@@ -16,15 +16,16 @@
     .hint { color: #9fb3c8; font-size: 12px; margin-top: 4px; }
     .notice { background: #202634; border: 1px solid #3a4150; border-radius: 8px; padding: 12px 14px; margin: 12px 0; font-size: 13px; }
     .warning { color: #e9c46a; }
-    select, input[type="url"], input[type="search"], textarea, button {
+    select, input[type="url"], input[type="search"], textarea, button, .tool-link {
       background: #2b3140; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 8px; padding: 7px 10px; font: inherit;
     }
     input[type="url"], input[type="search"], textarea { width: 100%; box-sizing: border-box; }
     textarea { min-height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
     input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; }
     input[type="file"] { max-width: 100%; }
-    button { cursor: pointer; }
+    button, .tool-link { cursor: pointer; }
     button:disabled { opacity: .5; cursor: not-allowed; }
+    .tool-link { display: inline-block; text-decoration: none; white-space: nowrap; }
     .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
     .saved { color: #5fd38b; font-size: 13px; min-height: 18px; margin-top: 8px; }
     .status-err { color: #ff8a8a; }
@@ -178,6 +179,16 @@
         可直接填入 <code>https://github.com/immersive-translate/terms/tree/main/glossaries</code>，讀取清單後自行選擇要使用的辭庫。
         Vibe Reading 只採用資料格式與目錄讀取相容設計，不會預設連線、預載、選取或重新散布任何第三方辭庫。
       </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <h2>Prompt Diff Lab／提示詞差異工具</h2>
+        <div class="hint">比較 v1.4 原版 Gemini system prompt 與目前修正版，也可貼入任意兩版 prompt 做逐詞或逐行差異分析。工具完全在本機執行，不會呼叫 AI。</div>
+      </div>
+      <a class="tool-link" href="prompt-diff.html" target="_blank" rel="noopener">開啟 Prompt Diff Lab</a>
     </div>
   </div>
 
