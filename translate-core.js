@@ -25,7 +25,7 @@
   ];
 
   const GLOSSARY_SYNC_TTL_MS = 24 * 60 * 60 * 1000;
-  const MAX_GLOSSARY_ROWS = 2000;
+  const MAX_GLOSSARY_ROWS = 5000;
   const MAX_PROMPT_TERMS = 24;
 
   function browserDefaultTarget() {
@@ -167,24 +167,51 @@
     });
   }
 
+  async function requestRemoteGlossarySet(sources) {
+    return await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: 'VIBE_FETCH_GLOSSARY_SET', sources }, (resp) => {
+        const err = chrome.runtime.lastError;
+        if (err) return reject(new Error(err.message));
+        if (!resp?.ok) return reject(new Error(resp?.error || '遠端辭庫組合下載失敗'));
+        resolve(resp.text || '');
+      });
+    });
+  }
+
   async function loadGlossary(targetLang) {
     const keys = [
-      'glossaryEnabled', 'glossaryCsv', 'glossarySourceUrl',
-      'glossaryAutoSync', 'glossarySourceConfirmed', 'glossaryLastSync',
+      'glossaryEnabled', 'glossaryCsv',
+      'glossaryRemoteMode', 'glossaryCatalogUrl', 'glossarySelectedSources',
+      'glossarySourceUrl', 'glossaryAutoSync',
+      'glossarySourceConfirmed', 'glossaryLastSync',
     ];
     const cfg = await storageGet(keys);
     if (cfg.glossaryEnabled !== true) return [];
 
     let csv = cfg.glossaryCsv || '';
+    const selectedSources = Array.isArray(cfg.glossarySelectedSources)
+      ? cfg.glossarySelectedSources
+      : [];
+
+    // Migration: older settings only had a single glossarySourceUrl.
+    const remoteMode = cfg.glossaryRemoteMode ||
+      (selectedSources.length ? 'catalog' : 'single');
+    const hasRemoteSource = remoteMode === 'catalog'
+      ? selectedSources.length > 0
+      : !!cfg.glossarySourceUrl;
+
     const shouldSync =
       cfg.glossaryAutoSync === true &&
       cfg.glossarySourceConfirmed === true &&
-      !!cfg.glossarySourceUrl &&
+      hasRemoteSource &&
       (!cfg.glossaryLastSync || Date.now() - cfg.glossaryLastSync >= GLOSSARY_SYNC_TTL_MS);
 
     if (shouldSync) {
       try {
-        csv = await requestRemoteGlossary(cfg.glossarySourceUrl);
+        csv = remoteMode === 'catalog'
+          ? await requestRemoteGlossarySet(selectedSources)
+          : await requestRemoteGlossary(cfg.glossarySourceUrl);
+
         await storageSet({
           glossaryCsv: csv,
           glossaryLastSync: Date.now(),
