@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vibe Reading — Prompt Diff Lab</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #1f2430; color: #e6e6e6; }
+    .wrap { max-width: 1180px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 20px; }
+    h2 { margin: 0; font-size: 15px; }
+    .sub, .hint { color: #9fb3c8; }
+    .sub { margin: 0 0 18px; }
+    .toolbar, .card { background: #262c3a; border: 1px solid #3a4150; border-radius: 12px; }
+    .toolbar { padding: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
+    .control { display: grid; gap: 5px; min-width: 150px; }
+    .control.grow { flex: 1; min-width: 240px; }
+    label { font-weight: 600; }
+    select, button, textarea { background: #2b3140; color: #e6e6e6; border: 1px solid #475064; border-radius: 8px; font: inherit; }
+    select, button { padding: 8px 10px; }
+    button { cursor: pointer; }
+    button:hover { border-color: #6f7b93; }
+    textarea { width: 100%; min-height: 230px; padding: 12px; resize: vertical; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .card { padding: 14px; min-width: 0; }
+    .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .badge { padding: 2px 7px; border: 1px solid #475064; border-radius: 999px; color: #b8c8da; font-size: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+    .metric { background: #262c3a; border: 1px solid #3a4150; border-radius: 10px; padding: 10px; }
+    .metric strong { display: block; font-size: 18px; }
+    .metric span { color: #9fb3c8; font-size: 12px; }
+    .diff-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .diff-pane { min-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .same { color: inherit; }
+    .del { background: rgba(255, 110, 110, .18); text-decoration: line-through; text-decoration-thickness: 1px; }
+    .add { background: rgba(95, 211, 139, .18); }
+    .unified { margin-top: 14px; }
+    .unified .diff-pane { min-height: 120px; }
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 0; color: #9fb3c8; font-size: 12px; }
+    .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
+    .legend .l-del { background: rgba(255, 110, 110, .28); }
+    .legend .l-add { background: rgba(95, 211, 139, .28); }
+    .analysis { margin-top: 14px; }
+    .rule-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+    .rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 9px 10px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; }
+    .yes { color: #75d69a; }
+    .no { color: #9aa8b8; }
+    .status { min-height: 20px; color: #9fb3c8; margin-top: 10px; }
+    @media (max-width: 760px) {
+      body { padding: 14px; }
+      .grid, .diff-grid, .rule-list { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <h1>Prompt Diff Lab／提示詞差異工具</h1>
+    <p class="sub">比較 Vibe Reading 原版與目前修正版 Gemini system prompt，也可貼入任意兩版 prompt。全部在本機瀏覽器處理，不呼叫 AI。</p>
+
+    <section class="toolbar" aria-label="比較設定">
+      <div class="control">
+        <label for="targetLang">目標語言</label>
+        <select id="targetLang"></select>
+      </div>
+      <div class="control">
+        <label for="diffMode">比較粒度</label>
+        <select id="diffMode">
+          <option value="token">逐詞／符號</option>
+          <option value="line">逐行</option>
+        </select>
+      </div>
+      <button id="loadBuiltin" type="button">載入原版 vs 現行版</button>
+      <button id="swapPrompts" type="button">交換左右</button>
+      <button id="clearPrompts" type="button">清空</button>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="head"><h2>原版 / Before</h2><span class="badge" id="leftLabel">v1.4 baseline</span></div>
+        <textarea id="beforePrompt" spellcheck="false" aria-label="原版提示詞"></textarea>
+      </div>
+      <div class="card">
+        <div class="head"><h2>修正版 / After</h2><span class="badge" id="rightLabel">current branch</span></div>
+        <textarea id="afterPrompt" spellcheck="false" aria-label="修正版提示詞"></textarea>
+      </div>
+    </section>
+
+    <section class="metrics" aria-label="差異統計">
+      <div class="metric"><strong id="beforeChars">0</strong><span>Before 字元</span></div>
+      <div class="metric"><strong id="afterChars">0</strong><span>After 字元</span></div>
+      <div class="metric"><strong id="addedCount">0</strong><span>新增單位</span></div>
+      <div class="metric"><strong id="removedCount">0</strong><span>刪除單位</span></div>
+      <div class="metric"><strong id="similarity">100%</strong><span>內容相似度</span></div>
+    </section>
+
+    <section class="card">
+      <div class="head"><h2>並排差異</h2><span class="hint" id="modeHint">逐詞／符號</span></div>
+      <div class="diff-grid">
+        <div class="diff-pane" id="beforeDiff" aria-label="原版差異"></div>
+        <div class="diff-pane" id="afterDiff" aria-label="修正版差異"></div>
+      </div>
+      <div class="legend"><span><i class="l-del"></i>刪除／被取代</span><span><i class="l-add"></i>新增／替代</span></div>
+    </section>
+
+    <section class="card unified">
+      <div class="head"><h2>Unified Diff</h2><span class="hint">同一視圖快速檢查增刪</span></div>
+      <div class="diff-pane" id="unifiedDiff" aria-label="統一差異"></div>
+    </section>
+
+    <section class="card analysis">
+      <div class="head"><h2>翻譯 Prompt 規則覆蓋</h2><span class="hint">依文字特徵檢查；不是模型品質評分</span></div>
+      <div class="rule-list" id="ruleList"></div>
+    </section>
+
+    <div class="status" id="status" aria-live="polite"></div>
+  </main>
+
+  <script src="translate-core.js"></script>
+  <script src="prompt-diff.js"></script>
+</body>
+</html>
