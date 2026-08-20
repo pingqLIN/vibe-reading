@@ -110,10 +110,54 @@ GitHub 目錄模式只會更新**已經由使用者選取的檔案 URL**：
 
 ## 與翻譯引擎的關係
 
-- **Gemini Nano fallback**：目前段落實際出現的術語會與來源文字一起送入 Gemini Nano；不會把整個辭庫塞進 prompt，以降低 context 使用量。
-- **Translator API**：Chrome Translator API 目前沒有 glossary 參數，因此 Vibe Reading 不會猜測其已翻譯文字。只有原始 `source` 術語在譯文中仍原樣保留時，才會安全地替換成指定 `target`。
+專業辭庫現在採 **Glossary Hybrid routing**，而不是只在 Translator API 翻完後做文字替換。
 
-每次 Gemini Nano 翻譯最多加入 24 條與目前段落相關的術語。
+### Auto（預設）
+
+- **目前段落沒有命中辭庫術語**：優先使用 Chrome Translator API，保留原本的速度優勢。
+- **目前段落命中辭庫術語**：優先改走 Gemini Nano / Prompt API，並只把該段實際命中的術語附在 prompt payload 中。
+- **Gemini Nano 不可用、尚未下載或首次建立需要使用者手勢**：退回 Translator API，並以 placeholder 保護命中的來源術語，翻譯後再還原成辭庫指定 target。
+
+每次 Gemini Nano 翻譯最多加入 24 條與目前段落相關的術語，不會把整份辭庫塞進 context。
+
+### Force Translator API
+
+所有段落都固定使用 Translator API。命中專業辭庫時會使用 placeholder 保護術語，再還原成指定 target。
+
+這個模式主要用於 A/B、相容性與速度測試，不代表 Translator API 原生支援 glossary。
+
+### Force Gemini Nano
+
+所有段落都固定使用 Gemini Nano / Prompt API，使用目前 `translationSystemPrompt()` 與 glossary payload。
+
+這個模式最適合直接比較舊版／新版 prompt 的行為差異。
+
+## 設定變更何時生效
+
+辭庫開關、辭庫內容、遠端匯入結果與 Engine Mode 變更後，**下一個尚未翻譯的段落就會使用新設定**。
+
+已經完成並顯示在頁面上的舊譯文不會自動重翻；若要比較前後差異，請切回原文後重新翻譯、重新開啟 PDF 翻譯，或手動重新執行該段。
+
+## Prompt Diff Lab 與診斷資訊
+
+設定頁可開啟 **Prompt Diff Lab／提示詞差異工具**。
+
+除了比較 v1.4 原版與目前 system prompt，它也能控制全域翻譯測試模式：
+
+- `Auto（Glossary Hybrid）`
+- `Force Translator API`
+- `Force Gemini Nano`
+
+每次翻譯會留下最近一次診斷資訊：
+
+- `Base Engine`：最初建立的 engine。
+- `Effective Engine`：該段實際使用的 engine。
+- `Glossary Loaded`：目前目標語言可用的辭庫詞條數。
+- `Matched`：本段原文實際命中的術語數。
+- `Applied`：譯文中實際觀察到指定 target 的術語數。
+- `Fallback`：是否發生 Gemini unavailable、首次下載手勢限制或 placeholder fallback。
+
+如開啟「在翻譯狀態列顯示診斷」，網頁與 PDF 的狀態列也會顯示簡短路由摘要。
 
 ## 第三方資料責任
 
