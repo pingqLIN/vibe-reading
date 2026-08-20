@@ -24,9 +24,43 @@
     { code: 'ru',      name: 'Русский', locale: 'ru' },
   ];
 
+  const ENGINE_MODES = [
+    { value: 'auto', name: 'Auto（Glossary Hybrid）' },
+    { value: 'translator', name: 'Force Translator API' },
+    { value: 'gemini', name: 'Force Gemini Nano' },
+  ];
+
   const GLOSSARY_SYNC_TTL_MS = 24 * 60 * 60 * 1000;
   const MAX_GLOSSARY_ROWS = 5000;
   const MAX_PROMPT_TERMS = 24;
+  const GLOSSARY_KEYS = new Set([
+    'glossaryEnabled', 'glossaryCsv', 'glossaryRemoteMode', 'glossaryCatalogUrl',
+    'glossarySelectedSources', 'glossarySourceUrl', 'glossaryAutoSync',
+    'glossarySourceConfirmed', 'glossaryLastSync',
+  ]);
+
+  let glossaryRevision = 0;
+  const glossaryCache = new Map();
+  let engineModeCache = null;
+  let diagnosticsVerboseCache = null;
+  let pendingDiagnostics = null;
+  let diagnosticsTimer = null;
+
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      if (Object.keys(changes).some(key => GLOSSARY_KEYS.has(key))) {
+        glossaryRevision++;
+        glossaryCache.clear();
+      }
+      if (changes.translationEngineMode) {
+        engineModeCache = normalizeEngineMode(changes.translationEngineMode.newValue);
+      }
+      if (changes.translationDiagnosticsVerbose) {
+        diagnosticsVerboseCache = changes.translationDiagnosticsVerbose.newValue === true;
+      }
+    });
+  }
 
   function browserDefaultTarget() {
     const l = (navigator.language || 'en').toLowerCase();
@@ -47,6 +81,33 @@
 
   function targetLocale(code) {
     return langInfo(code).locale || code;
+  }
+
+  function normalizeEngineMode(value) {
+    return ['auto', 'translator', 'gemini'].includes(value) ? value : 'auto';
+  }
+
+  // ─── Storage helpers ────────────────────────────────────────────────────────
+  function storageGet(keys) {
+    return new Promise(resolve => chrome.storage.local.get(keys, resolve));
+  }
+
+  function storageSet(values) {
+    return new Promise(resolve => chrome.storage.local.set(values, resolve));
+  }
+
+  async function getEngineMode() {
+    if (engineModeCache) return engineModeCache;
+    const cfg = await storageGet('translationEngineMode');
+    engineModeCache = normalizeEngineMode(cfg.translationEngineMode);
+    return engineModeCache;
+  }
+
+  async function getDiagnosticsVerbose() {
+    if (diagnosticsVerboseCache !== null) return diagnosticsVerboseCache;
+    const cfg = await storageGet('translationDiagnosticsVerbose');
+    diagnosticsVerboseCache = cfg.translationDiagnosticsVerbose === true;
+    return diagnosticsVerboseCache;
   }
 
   // ─── Source-language auto-detection ─────────────────────────────────────────
@@ -83,14 +144,6 @@
   }
 
   // ─── Optional professional glossary ─────────────────────────────────────────
-  function storageGet(keys) {
-    return new Promise(resolve => chrome.storage.local.get(keys, resolve));
-  }
-
-  function storageSet(values) {
-    return new Promise(resolve => chrome.storage.local.set(values, resolve));
-  }
-
   function parseCsvRows(text) {
     const rows = [];
     let row = [], field = '', quoted = false;
@@ -178,7 +231,11 @@
     });
   }
 
-  async function loadGlossary(targetLang) {
+  async function loadGlossarySnapshot(targetLang) {
+    const cacheKey = canonicalLangBucket(targetLang);
+    const cached = glossaryCache.get(cacheKey);
+    if (cached && cached.revision === glossaryRevision) return cached.snapshot;
+
     const keys = [
       'glossaryEnabled', 'glossaryCsv',
       'glossaryRemoteMode', 'glossaryCatalogUrl', 'glossarySelectedSources',
@@ -186,14 +243,16 @@
       'glossarySourceConfirmed', 'glossaryLastSync',
     ];
     const cfg = await storageGet(keys);
-    if (cfg.glossaryEnabled !== true) return [];
+    if (cfg.glossaryEnabled !== true) {
+      const snapshot = { enabled: false, terms: [], loaded: 0 };
+      glossaryCache.set(cacheKey, { revision: glossaryRevision, snapshot });
+      return snapshot;
+    }
 
     let csv = cfg.glossaryCsv || '';
     const selectedSources = Array.isArray(cfg.glossarySelectedSources)
       ? cfg.glossarySelectedSources
       : [];
-
-    // Migration: older settings only had a single glossarySourceUrl.
     const remoteMode = cfg.glossaryRemoteMode ||
       (selectedSources.length ? 'catalog' : 'single');
     const hasRemoteSource = remoteMode === 'catalog'
@@ -223,7 +282,14 @@
       }
     }
 
-    return parseGlossaryCsv(csv, targetLang);
+    const terms = parseGlossaryCsv(csv, targetLang);
+    const snapshot = { enabled: true, terms, loaded: terms.length };
+    glossaryCache.set(cacheKey, { revision: glossaryRevision, snapshot });
+    return snapshot;
+  }
+
+  async function loadGlossary(targetLang) {
+    return (await loadGlossarySnapshot(targetLang)).terms;
   }
 
   function escapeRegex(s) {
@@ -231,10 +297,15 @@
   }
 
   function termRegex(source) {
-    const escaped = escapeRegex(source);
-    const startsWord = /^[\p{L}\p{N}_]/u.test(source);
-    const endsWord = /[\p{L}\p{N}_]$/u.test(source);
-    return new RegExp(`${startsWord ? '(?<![\\p{L}\\p{N}_])' : ''}${escaped}${endsWord ? '(?![\\p{L}\\p{N}_])' : ''}`, 'giu');
+    const raw = String(source || '');
+    const pieces = raw.split(/([\s\-‐‑–—]+)/u);
+    const body = pieces.map(piece => {
+      if (/^[\s\-‐‑–—]+$/u.test(piece)) return '(?:[\\s\\u00A0]+|[-‐‑–—]\\s*)';
+      return escapeRegex(piece);
+    }).join('');
+    const startsWord = /^[\p{L}\p{N}_]/u.test(raw);
+    const endsWord = /[\p{L}\p{N}_]$/u.test(raw);
+    return new RegExp(`${startsWord ? '(?<![\\p{L}\\p{N}_])' : ''}${body}${endsWord ? '(?![\\p{L}\\p{N}_])' : ''}`, 'giu');
   }
 
   function glossaryTermsForText(text, glossary) {
@@ -261,6 +332,49 @@
     return out;
   }
 
+  function protectGlossaryTerms(text, terms) {
+    let out = String(text || '');
+    const tokens = [];
+    const sorted = [...(terms || [])].sort((a, b) => b.source.length - a.source.length);
+    for (const term of sorted) {
+      const index = tokens.length;
+      const token = `__VIBE_TERM_${index}__`;
+      let replaced = false;
+      try {
+        out = out.replace(termRegex(term.source), () => {
+          replaced = true;
+          return token;
+        });
+      } catch (_) {
+        if (out.includes(term.source)) {
+          out = out.split(term.source).join(token);
+          replaced = true;
+        }
+      }
+      if (replaced) tokens.push({ token, term });
+    }
+    return { text: out, tokens };
+  }
+
+  function restoreGlossaryTokens(text, tokens) {
+    let out = String(text || '');
+    let restored = 0;
+    for (const item of tokens || []) {
+      if (out.includes(item.token)) {
+        out = out.split(item.token).join(item.term.target);
+        restored++;
+      }
+    }
+    return { text: out, restored };
+  }
+
+  function countAppliedTerms(text, terms) {
+    const lower = String(text || '').toLocaleLowerCase();
+    return (terms || []).filter(term =>
+      term.target && lower.includes(String(term.target).toLocaleLowerCase())
+    ).length;
+  }
+
   function translationSystemPrompt(targetLang) {
     const info = langInfo(targetLang);
     return [
@@ -275,98 +389,259 @@
     ].join(' ');
   }
 
-  // ─── Translator init ────────────────────────────────────────────────────────
+  // ─── Engine creation ────────────────────────────────────────────────────────
+  function makeEngineState(sourceLang, targetLang, options) {
+    return {
+      type: null,
+      sourceLang,
+      targetLang,
+      targetName: langName(targetLang),
+      t: null,
+      session: null,
+      isManual: options.isManual || false,
+      onStatus: options.onStatus || (() => {}),
+      onProgress: options.onProgress || (() => {}),
+      onIndeterminate: options.onIndeterminate || (() => {}),
+      lastDiagnostics: null,
+    };
+  }
+
+  async function ensureTranslatorEngine(trans, allowDownload = true) {
+    if (trans.t) return trans.t;
+    if (!('Translator' in self)) throw new Error('Translator API 不可用。');
+
+    const avail = await Translator.availability({
+      sourceLanguage: trans.sourceLang,
+      targetLanguage: trans.targetLang,
+    });
+    if (avail === 'unavailable') throw new Error('此語言組合的 Translator API 不可用。');
+    if (!allowDownload && needsDownloadGesture(avail)) throw modelDownloadNeedsUserGestureError();
+
+    if (avail === 'downloadable') {
+      trans.onStatus('首次使用：下載翻譯語言包...');
+      trans.onProgress(0, '0%');
+    }
+    trans.t = await Translator.create({
+      sourceLanguage: trans.sourceLang,
+      targetLanguage: trans.targetLang,
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          const pct = Math.round(e.loaded * 100);
+          trans.onStatus(`下載翻譯語言包 ${pct}%（僅首次）...`);
+          trans.onProgress(e.loaded, `${pct}%`);
+        });
+      },
+    });
+    return trans.t;
+  }
+
+  async function ensureGeminiEngine(trans, allowDownload = true) {
+    if (trans.session) return trans.session;
+    if (!('LanguageModel' in self)) throw new Error('Gemini Nano / Prompt API 不可用。');
+
+    const avail = await LanguageModel.availability();
+    if (avail === 'unavailable') throw new Error('Gemini Nano / Prompt API 不可用。');
+    if (!allowDownload && needsDownloadGesture(avail)) throw modelDownloadNeedsUserGestureError();
+
+    trans.onStatus('載入 Gemini Nano…');
+    trans.onIndeterminate(true);
+    trans.session = await LanguageModel.create({
+      initialPrompts: [{ role: 'system', content: translationSystemPrompt(trans.targetLang) }],
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          const pct = Math.round(e.loaded * 100);
+          trans.onStatus(`下載 Gemini Nano 模型 ${pct}%（僅首次）...`);
+          trans.onProgress(e.loaded, `${pct}%`);
+        });
+      },
+    });
+    trans.onIndeterminate(false);
+    return trans.session;
+  }
+
   async function initTranslator(sourceLang, targetLang, options = {}) {
-    const isManual        = options.isManual || false;
-    const onStatus        = options.onStatus || (() => {});
-    const onProgress      = options.onProgress || (() => {});
-    const onIndeterminate = options.onIndeterminate || (() => {});
-
     if (sourceLang === targetLang) sourceLang = sourceLang === 'en' ? 'fr' : 'en';
+    const trans = makeEngineState(sourceLang, targetLang, options);
+    const mode = await getEngineMode();
     let downloadNeedsGesture = false;
-    let glossary = [];
-    try { glossary = await loadGlossary(targetLang); }
-    catch (e) { console.warn('[氛圍閱讀] 專業辭庫載入失敗，略過辭庫：', e); }
 
-    if ('Translator' in self) {
+    if (mode === 'gemini') {
       try {
-        const avail = await Translator.availability({ sourceLanguage: sourceLang, targetLanguage: targetLang });
-        if (avail !== 'unavailable') {
-          if (needsDownloadGesture(avail) && !isManual) {
-            downloadNeedsGesture = true;
-          } else {
-            if (avail === 'downloadable') { onStatus('首次使用：下載翻譯語言包...'); onProgress(0, '0%'); }
-            const t = await Translator.create({
-              sourceLanguage: sourceLang,
-              targetLanguage: targetLang,
-              monitor(m) {
-                m.addEventListener('downloadprogress', (e) => {
-                  const pct = Math.round(e.loaded * 100);
-                  onStatus(`下載翻譯語言包 ${pct}%（僅首次）...`);
-                  onProgress(e.loaded, `${pct}%`);
-                });
-              },
-            });
-            return { type: 'translator', t, targetLang, targetName: langName(targetLang), glossary };
-          }
-        }
+        await ensureGeminiEngine(trans, options.isManual === true);
+        trans.type = 'lm';
+        return trans;
       } catch (e) {
-        console.warn('[氛圍閱讀] Translator 初始化失敗，改用 Gemini Nano：', e);
+        if (e?.name === 'ModelDownloadNeedsUserGesture') downloadNeedsGesture = true;
+        else throw e;
       }
     }
 
-    if ('LanguageModel' in self) {
-      const avail = await LanguageModel.availability();
-      if (avail !== 'unavailable') {
-        if (needsDownloadGesture(avail) && !isManual) {
-          downloadNeedsGesture = true;
-        } else {
-          onStatus('首次使用：載入 Gemini Nano 模型（約 2.4GB）...');
-          onIndeterminate(true);
-          const targetName = langName(targetLang);
-          const session = await LanguageModel.create({
-            initialPrompts: [{ role: 'system', content: translationSystemPrompt(targetLang) }],
-            monitor(m) {
-              m.addEventListener('downloadprogress', (e) => {
-                const pct = Math.round(e.loaded * 100);
-                onStatus(`下載 Gemini Nano 模型 ${pct}%（僅首次）...`);
-                onProgress(e.loaded, `${pct}%`);
-              });
-            },
-          });
-          onIndeterminate(false);
-          return { type: 'lm', session, targetLang, targetName, glossary };
-        }
+    if (mode === 'translator') {
+      try {
+        await ensureTranslatorEngine(trans, options.isManual === true);
+        trans.type = 'translator';
+        return trans;
+      } catch (e) {
+        if (e?.name === 'ModelDownloadNeedsUserGesture') downloadNeedsGesture = true;
+        else throw e;
       }
+    }
+
+    // Auto keeps the original fast Translator-first behaviour. Glossary-aware
+    // routing happens per paragraph in doTranslate().
+    try {
+      await ensureTranslatorEngine(trans, options.isManual === true);
+      trans.type = 'translator';
+      return trans;
+    } catch (e) {
+      if (e?.name === 'ModelDownloadNeedsUserGesture') downloadNeedsGesture = true;
+      else console.warn('[氛圍閱讀] Translator 初始化失敗，改用 Gemini Nano：', e);
+    }
+
+    try {
+      await ensureGeminiEngine(trans, options.isManual === true);
+      trans.type = 'lm';
+      return trans;
+    } catch (e) {
+      if (e?.name === 'ModelDownloadNeedsUserGesture') downloadNeedsGesture = true;
+      else console.warn('[氛圍閱讀] Gemini Nano 初始化失敗：', e);
     }
 
     if (downloadNeedsGesture) throw modelDownloadNeedsUserGestureError();
     throw new Error('無法初始化任何翻譯引擎。');
   }
 
-  async function doTranslate(trans, text) {
-    const terms = glossaryTermsForText(text, trans.glossary);
-    if (trans.type === 'translator') {
-      const translated = await trans.t.translate(text);
-      // Translator API has no glossary parameter. Only replace source terms that
-      // survived untranslated, avoiding guesses about already-translated wording.
-      return applyUntranslatedGlossary(translated, terms);
-    }
-
+  // ─── Translation routing ────────────────────────────────────────────────────
+  async function translateViaGemini(trans, text, terms) {
+    const session = await ensureGeminiEngine(trans, false);
     const payload = { source: String(text) };
     if (terms.length) payload.glossary = terms;
-    return await trans.session.prompt(JSON.stringify(payload));
+    return await session.prompt(JSON.stringify(payload));
+  }
+
+  async function translateViaTranslator(trans, text, terms) {
+    const translator = await ensureTranslatorEngine(trans, false);
+    if (!terms.length) return { text: await translator.translate(text), placeholderFallback: false };
+
+    const protectedInput = protectGlossaryTerms(text, terms);
+    const translatedProtected = await translator.translate(protectedInput.text);
+    const restored = restoreGlossaryTokens(translatedProtected, protectedInput.tokens);
+    if (restored.restored === protectedInput.tokens.length) {
+      return { text: restored.text, placeholderFallback: false };
+    }
+
+    // Some language packs may alter placeholder tokens. Fall back to the old safe
+    // behaviour instead of exposing broken placeholders to the user.
+    const plain = await translator.translate(text);
+    return {
+      text: applyUntranslatedGlossary(plain, terms),
+      placeholderFallback: true,
+    };
+  }
+
+  function diagnosticsSummary(diag) {
+    const glossary = diag.glossaryEnabled
+      ? `Glossary ${diag.loaded}/${diag.matched}/${diag.applied}`
+      : 'Glossary OFF';
+    const route = diag.baseEngine && diag.baseEngine !== diag.effectiveEngine
+      ? `${diag.baseEngine}→${diag.effectiveEngine}`
+      : diag.effectiveEngine;
+    return `${route} · ${glossary}${diag.fallback ? ` · ${diag.fallback}` : ''}`;
+  }
+
+  async function publishDiagnostics(trans, diag) {
+    trans.lastDiagnostics = diag;
+    pendingDiagnostics = diag;
+    clearTimeout(diagnosticsTimer);
+    diagnosticsTimer = setTimeout(() => {
+      const snapshot = pendingDiagnostics;
+      pendingDiagnostics = null;
+      storageSet({ translationDiagnostics: snapshot }).catch(() => {});
+    }, 150);
+
+    if (await getDiagnosticsVerbose()) {
+      setTimeout(() => {
+        try { trans.onStatus(diagnosticsSummary(diag)); } catch (_) {}
+      }, 0);
+    }
+  }
+
+  async function doTranslate(trans, text) {
+    if (!trans) throw new Error('翻譯引擎尚未初始化。');
+    const sourceText = String(text || '');
+    const mode = await getEngineMode();
+    const glossarySnapshot = await loadGlossarySnapshot(trans.targetLang);
+    const terms = glossaryTermsForText(sourceText, glossarySnapshot.terms);
+    const baseEngine = trans.type === 'lm' ? 'gemini' : 'translator';
+    let effectiveEngine = baseEngine;
+    let output = '';
+    let fallback = '';
+
+    if (mode === 'gemini') {
+      output = await translateViaGemini(trans, sourceText, terms);
+      effectiveEngine = 'gemini';
+    } else if (mode === 'translator') {
+      const result = await translateViaTranslator(trans, sourceText, terms);
+      output = result.text;
+      effectiveEngine = 'translator';
+      if (result.placeholderFallback) fallback = 'placeholder fallback';
+    } else if (terms.length) {
+      // Auto + glossary hit: prefer Gemini so glossary mappings can be supplied as
+      // structured context. If Nano is unavailable/download-gated, retain exact
+      // terms as far as possible with Translator placeholders.
+      try {
+        output = await translateViaGemini(trans, sourceText, terms);
+        effectiveEngine = 'gemini';
+      } catch (e) {
+        const result = await translateViaTranslator(trans, sourceText, terms);
+        output = result.text;
+        effectiveEngine = 'translator';
+        fallback = e?.name === 'ModelDownloadNeedsUserGesture'
+          ? 'Gemini needs first-use gesture'
+          : 'Gemini unavailable';
+        if (result.placeholderFallback) fallback += ' / placeholder fallback';
+      }
+    } else {
+      // Auto + no glossary hit: keep Translator API for speed, with Gemini fallback.
+      try {
+        const result = await translateViaTranslator(trans, sourceText, []);
+        output = result.text;
+        effectiveEngine = 'translator';
+      } catch (e) {
+        output = await translateViaGemini(trans, sourceText, []);
+        effectiveEngine = 'gemini';
+        fallback = 'Translator unavailable';
+      }
+    }
+
+    const applied = countAppliedTerms(output, terms);
+    const diag = {
+      timestamp: Date.now(),
+      mode,
+      targetLang: trans.targetLang,
+      baseEngine,
+      effectiveEngine,
+      glossaryEnabled: glossarySnapshot.enabled,
+      loaded: glossarySnapshot.loaded,
+      matched: terms.length,
+      applied,
+      matchedTerms: terms.slice(0, 12),
+      fallback,
+    };
+    await publishDiagnostics(trans, diag);
+    return output;
   }
 
   // ─── Lightweight availability probe ─────────────────────────────────────────
   async function checkAvailability(targetLang) {
-    if ('Translator' in self) {
+    const mode = await getEngineMode();
+    if (mode !== 'gemini' && 'Translator' in self) {
       try {
         const a = await Translator.availability({ sourceLanguage: 'en', targetLanguage: targetLang });
         if (a !== 'unavailable') return { ok: true, engine: 'Translator API' };
       } catch (_) {}
     }
-    if ('LanguageModel' in self) {
+    if (mode !== 'translator' && 'LanguageModel' in self) {
       try {
         const a = await LanguageModel.availability();
         if (a !== 'unavailable') return { ok: true, engine: 'Gemini Nano' };
@@ -377,7 +652,9 @@
 
   window.VibeTranslate = {
     TARGET_LANGS,
+    ENGINE_MODES,
     langName,
+    targetLocale,
     browserDefaultTarget,
     detectSourceLang,
     initTranslator,
@@ -386,5 +663,8 @@
     parseGlossaryCsv,
     glossaryTermsForText,
     translationSystemPrompt,
+    diagnosticsSummary,
+    getEngineMode,
+    loadGlossary,
   };
 })();
