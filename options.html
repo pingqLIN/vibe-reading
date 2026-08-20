@@ -16,12 +16,12 @@
     .hint { color: #9fb3c8; font-size: 12px; margin-top: 4px; }
     .notice { background: #202634; border: 1px solid #3a4150; border-radius: 8px; padding: 12px 14px; margin: 12px 0; font-size: 13px; }
     .warning { color: #e9c46a; }
-    select, input[type="url"], textarea, button {
+    select, input[type="url"], input[type="search"], textarea, button {
       background: #2b3140; color: #e6e6e6; border: 1px solid #3a4150; border-radius: 8px; padding: 7px 10px; font: inherit;
     }
-    input[type="url"], textarea { width: 100%; box-sizing: border-box; }
+    input[type="url"], input[type="search"], textarea { width: 100%; box-sizing: border-box; }
     textarea { min-height: 120px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    input[type="checkbox"] { width: 18px; height: 18px; }
+    input[type="checkbox"], input[type="radio"] { width: 18px; height: 18px; }
     input[type="file"] { max-width: 100%; }
     button { cursor: pointer; }
     button:disabled { opacity: .5; cursor: not-allowed; }
@@ -29,7 +29,22 @@
     .saved { color: #5fd38b; font-size: 13px; min-height: 18px; margin-top: 8px; }
     .status-err { color: #ff8a8a; }
     code { color: #c9d7e5; }
-    .glossary-body[hidden] { display: none; }
+    .glossary-body[hidden], .remote-pane[hidden] { display: none; }
+    .mode-row { display: flex; gap: 18px; flex-wrap: wrap; margin: 10px 0; }
+    .mode-row label { display: inline-flex; align-items: center; gap: 7px; font-weight: 500; }
+    .catalog-tools { display: flex; gap: 8px; margin-top: 10px; }
+    .catalog-tools input { flex: 1; }
+    .catalog-list { margin-top: 10px; max-height: 320px; overflow: auto; border: 1px solid #3a4150; border-radius: 8px; background: #202634; }
+    .catalog-empty { padding: 16px; color: #9fb3c8; text-align: center; font-size: 13px; }
+    .catalog-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 11px; border-top: 1px solid #303747; }
+    .catalog-item:first-child { border-top: 0; }
+    .catalog-name { min-width: 0; }
+    .catalog-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .catalog-meta { color: #8fa3b8; font-size: 11px; }
+    .catalog-lang { color: #c9d7e5; font-size: 12px; white-space: nowrap; }
+    .selection-summary { color: #9fb3c8; font-size: 12px; margin-top: 8px; }
+    details { margin-top: 10px; }
+    summary { cursor: pointer; color: #c9d7e5; }
   </style>
 </head>
 <body>
@@ -65,7 +80,7 @@
     <div class="row">
       <div>
         <h2>專業辭庫（選用）</h2>
-        <div class="hint">相容於 Immersive Translate terms 的 <code>source,target,tgt_lng</code> CSV 格式。可自行載入檔案，或指定資料網址自動動態匯入。</div>
+        <div class="hint">相容於 Immersive Translate terms 的 <code>source,target,tgt_lng</code> CSV 格式。可從本機載入、直接貼上，或從 GitHub 辭庫目錄挑選多個檔案。</div>
       </div>
       <input type="checkbox" id="glossaryEnabled" aria-label="啟用專業辭庫">
     </div>
@@ -95,37 +110,73 @@
       </div>
 
       <div class="stack">
-        <label for="glossarySourceUrl">方法 C：設定辭庫資料網址</label>
-        <div class="hint">
-          貼入可直接下載 CSV 文字內容的網址（例如 GitHub Raw URL）。Vibe Reading 不會替你自動選擇第三方辭庫。
-          遠端來源僅允許 HTTPS；本機開發可用 localhost / 127.0.0.1。
+        <label>方法 C：遠端辭庫來源</label>
+        <div class="hint">推薦直接貼 GitHub 的辭庫目錄網址，Vibe Reading 會讀取目錄並讓你勾選要使用的 CSV。也保留直接 CSV URL 作為進階模式。</div>
+
+        <div class="mode-row">
+          <label><input type="radio" name="glossaryRemoteMode" id="remoteModeCatalog" value="catalog"> GitHub 辭庫目錄（推薦）</label>
+          <label><input type="radio" name="glossaryRemoteMode" id="remoteModeSingle" value="single"> 直接 CSV URL（進階）</label>
         </div>
-        <input type="url" id="glossarySourceUrl" placeholder="https://example.com/path/glossary_zh-TW.csv">
+
+        <div id="catalogPane" class="remote-pane">
+          <label for="glossaryCatalogUrl">GitHub 辭庫目錄網址</label>
+          <div class="hint">
+            例如 <code>https://github.com/immersive-translate/terms/tree/main/glossaries</code>。
+            目前支援公開 GitHub repository 的 <code>/tree/&lt;branch&gt;/&lt;folder&gt;</code> 目錄。
+          </div>
+          <input type="url" id="glossaryCatalogUrl" placeholder="https://github.com/immersive-translate/terms/tree/main/glossaries">
+          <div class="actions">
+            <button id="fillImmersiveTermsExample" type="button">填入 Immersive Translate terms 範例</button>
+            <button id="loadGlossaryCatalog" type="button">讀取辭庫清單</button>
+          </div>
+
+          <div id="catalogSelector" hidden>
+            <div class="catalog-tools">
+              <input type="search" id="glossaryCatalogFilter" placeholder="搜尋 tech、programming、photography、zh-TW…">
+            </div>
+            <div class="selection-summary" id="catalogSelectionSummary">尚未選擇辭庫</div>
+            <div class="catalog-list" id="glossaryCatalogList"></div>
+            <div class="actions">
+              <button id="selectVisibleGlossaries" type="button">勾選目前顯示</button>
+              <button id="clearGlossarySelection" type="button">取消全部</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="singlePane" class="remote-pane" hidden>
+          <label for="glossarySourceUrl">直接 CSV URL</label>
+          <div class="hint">
+            貼入可直接回傳 CSV 文字內容的網址，例如 GitHub Raw URL。遠端來源僅允許 HTTPS；本機開發可用 localhost / 127.0.0.1。
+          </div>
+          <input type="url" id="glossarySourceUrl" placeholder="https://example.com/path/glossary_zh-TW.csv">
+        </div>
 
         <div class="notice warning">
           <label style="font-weight: 500;">
             <input type="checkbox" id="glossarySourceConfirmed">
-            我了解並確認：這個網址與資料內容是由我自行指定；我會自行確認第三方資料的授權、可信度與使用責任。
+            我了解並確認：目前選取的網址、檔案與資料內容是由我自行指定；我會自行確認第三方資料的授權、可信度與使用責任。
           </label>
+          <div class="hint">變更 GitHub 目錄、勾選項目或直接 CSV URL 後，此確認會自動失效，需重新勾選。</div>
         </div>
 
         <div class="row">
           <div>
             <label for="glossaryAutoSync">自動動態匯入</label>
-            <div class="hint">啟用後，在需要翻譯時最多每 24 小時重新抓取一次；抓取失敗會沿用上次成功快取。</div>
+            <div class="hint">啟用後只更新你已選取的辭庫，最多每 24 小時抓取一次；目錄中新出現的檔案不會被自動加入。抓取失敗會沿用上次成功快取。</div>
           </div>
           <input type="checkbox" id="glossaryAutoSync">
         </div>
 
         <div class="actions">
-          <button id="syncGlossaryNow" type="button">測試網址並立即匯入</button>
+          <button id="syncGlossaryNow" type="button">匯入目前選取的辭庫</button>
         </div>
         <div class="saved" id="glossaryStatus"></div>
       </div>
 
       <div class="notice">
         <strong>Immersive Translate terms 相容方式</strong><br>
-        將你要使用的相容 CSV「原始檔網址」貼到上方即可；Vibe Reading 只採用其資料格式相容設計，不會預設連線、預載或自動下載任何第三方詞庫。
+        可直接填入 <code>https://github.com/immersive-translate/terms/tree/main/glossaries</code>，讀取清單後自行選擇要使用的辭庫。
+        Vibe Reading 只採用資料格式與目錄讀取相容設計，不會預設連線、預載、選取或重新散布任何第三方辭庫。
       </div>
     </div>
   </div>
