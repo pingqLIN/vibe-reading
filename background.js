@@ -4,6 +4,9 @@ const MENU_PAGE      = 'vibe-translate-page';
 const MENU_SELECTION = 'vibe-translate-selection';
 const MENU_HOVER     = 'vibe-translate-hover';
 
+const MAX_GLOSSARY_BYTES = 2 * 1024 * 1024;
+const GLOSSARY_FETCH_TIMEOUT_MS = 15000;
+
 // ─── Open the two-pane PDF translation viewer for a given tab ──────────────────
 async function openViewer(tab) {
   let viewer = chrome.runtime.getURL('viewer.html');
@@ -22,28 +25,17 @@ function isPdf(url) {
   }
 }
 
-// Pages we can inject a content script into. chrome://, chrome-extension://,
-// devtools://, about:, view-source: and the Web Store are off-limits; file://
-// only works when the user enabled "Allow access to file URLs" (we still try
-// and fall back on failure).
 function canInject(url) {
   if (!/^(https?|file):/i.test(url)) return false;
   if (/^https?:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com)/i.test(url)) return false;
   return true;
 }
 
-// ─── Trigger router ─────────────────────────────────────────────────────────────
-// PDF → open the dedicated viewer (unchanged behaviour).
-// Normal web page → inject the in-page translator and toggle it.
-// Anything we can't inject into → fall back to the viewer (it shows guidance).
 async function handleTrigger(tab) {
   if (!tab || !tab.id) return;
   const url = tab.url || '';
   if (isPdf(url)) return openViewer(tab);
   if (!canInject(url)) return openViewer(tab);
-  // The content script is normally already present (static content_scripts), so
-  // message it directly; only fall back to injecting for tabs opened before the
-  // extension was installed/updated.
   try {
     await chrome.tabs.sendMessage(tab.id, { type: 'VIBE_TOGGLE_PAGE' });
   } catch (_) {
@@ -57,8 +49,6 @@ async function handleTrigger(tab) {
   }
 }
 
-// Inject the shared engine + content script (+ styles). Idempotent: re-running
-// is cheap and content.js guards against double-initialisation.
 async function injectInto(tabId) {
   await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
   await chrome.scripting.executeScript({
@@ -77,7 +67,6 @@ async function translateSelection(tab, text) {
   }
 }
 
-// Enable hover-translate WITHOUT translating the whole page.
 async function enableHover(tab) {
   if (!tab?.id || !canInject(tab.url || '')) return;
   try {
@@ -88,12 +77,53 @@ async function enableHover(tab) {
   }
 }
 
+// ─── Optional professional glossary remote source ─────────────────────────────
+function isAllowedGlossaryUrl(rawUrl) {
+  let u;
+  try { u = new URL(rawUrl); } catch { return false; }
+  if (u.protocol === 'https:') return true;
+  if (u.protocol !== 'http:') return false;
+  return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(u.hostname);
+}
+
+async function fetchGlossaryUrl(rawUrl) {
+  if (!isAllowedGlossaryUrl(rawUrl)) {
+    throw new Error('辭庫網址僅允許 HTTPS；本機開發可使用 http://localhost 或 127.0.0.1。');
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), GLOSSARY_FETCH_TIMEOUT_MS);
+  try {
+    const resp = await fetch(rawUrl, {
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow',
+      signal: ctrl.signal,
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const declaredLength = Number(resp.headers.get('content-length') || 0);
+    if (declaredLength > MAX_GLOSSARY_BYTES) {
+      throw new Error('辭庫檔案超過 2 MB 上限。');
+    }
+
+    const text = await resp.text();
+    if (new Blob([text]).size > MAX_GLOSSARY_BYTES) {
+      throw new Error('辭庫檔案超過 2 MB 上限。');
+    }
+    return text;
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error('辭庫下載逾時（15 秒）。');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ─── Context menu (right-click) ────────────────────────────────────────────────
 function setupMenu() {
   chrome.contextMenus.removeAll(() => {
-    // contexts:['all'] so the PDF native viewer (whose frame URL is a
-    // chrome-extension:// address) still surfaces the entry; handleTrigger
-    // routes PDFs to the viewer regardless.
     chrome.contextMenus.create({
       id: MENU_PAGE,
       title: '氛圍閱讀：翻譯這個頁面 / 切回原文',
@@ -126,9 +156,19 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   else if (info.menuItemId === MENU_HOVER) enableHover(tab);
 });
 
-// ─── Open the options page (requested by the in-page panel's ⚙ button) ──────────
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === 'VIBE_OPEN_OPTIONS') chrome.runtime.openOptionsPage();
+// ─── Messages ──────────────────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'VIBE_OPEN_OPTIONS') {
+    chrome.runtime.openOptionsPage();
+    return;
+  }
+
+  if (msg?.type === 'VIBE_FETCH_GLOSSARY_URL') {
+    fetchGlossaryUrl(msg.url)
+      .then(text => sendResponse({ ok: true, text }))
+      .catch(e => sendResponse({ ok: false, error: e.message || String(e) }));
+    return true;
+  }
 });
 
 // ─── Toolbar icon click ─────────────────────────────────────────────────────────
