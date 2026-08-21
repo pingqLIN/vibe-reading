@@ -4,152 +4,164 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Vibe Reading — Prompt Diff Lab</title>
-  <style>
-    :root { color-scheme: dark; }
-    * { box-sizing: border-box; }
-    body { margin: 0; padding: 24px; font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; background: #1f2430; color: #e6e6e6; }
-    .wrap { max-width: 1180px; margin: 0 auto; }
-    h1 { margin: 0 0 4px; font-size: 20px; }
-    h2 { margin: 0; font-size: 15px; }
-    .sub, .hint { color: #9fb3c8; }
-    .sub { margin: 0 0 18px; }
-    .toolbar, .card { background: #262c3a; border: 1px solid #3a4150; border-radius: 12px; }
-    .toolbar { padding: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 14px; }
-    .control { display: grid; gap: 5px; min-width: 150px; }
-    .control.grow { flex: 1; min-width: 240px; }
-    label { font-weight: 600; }
-    select, button, textarea { background: #2b3140; color: #e6e6e6; border: 1px solid #475064; border-radius: 8px; font: inherit; }
-    select, button { padding: 8px 10px; }
-    button { cursor: pointer; }
-    button:hover { border-color: #6f7b93; }
-    textarea { width: 100%; min-height: 230px; padding: 12px; resize: vertical; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    input[type="checkbox"] { width: 18px; height: 18px; }
-    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .card { padding: 14px; min-width: 0; margin-bottom: 14px; }
-    .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-    .badge { padding: 2px 7px; border: 1px solid #475064; border-radius: 999px; color: #b8c8da; font-size: 12px; }
-    .metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
-    .metric { background: #262c3a; border: 1px solid #3a4150; border-radius: 10px; padding: 10px; min-width: 0; }
-    .metric strong { display: block; font-size: 18px; overflow: hidden; text-overflow: ellipsis; }
-    .metric span { color: #9fb3c8; font-size: 12px; }
-    .route-metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 10px 0 0; }
-    .diff-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    .diff-pane { min-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
-    .same { color: inherit; }
-    .del { background: rgba(255, 110, 110, .18); text-decoration: line-through; text-decoration-thickness: 1px; }
-    .add { background: rgba(95, 211, 139, .18); }
-    .unified .diff-pane { min-height: 120px; }
-    .legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 0; color: #9fb3c8; font-size: 12px; }
-    .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -2px; }
-    .legend .l-del { background: rgba(255, 110, 110, .28); }
-    .legend .l-add { background: rgba(95, 211, 139, .28); }
-    .rule-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
-    .rule { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; padding: 9px 10px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; }
-    .yes { color: #75d69a; }
-    .no { color: #9aa8b8; }
-    .status { min-height: 20px; color: #9fb3c8; margin-top: 10px; }
-    .debug-row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
-    .check-row { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; font-weight: 500; }
-    .route-note { margin-top: 10px; padding: 10px 12px; background: #202634; border: 1px solid #3a4150; border-radius: 8px; color: #c9d7e5; }
-    .matched-list { margin: 8px 0 0; padding-left: 18px; color: #c9d7e5; }
-    .matched-list:empty { display: none; }
-    @media (max-width: 760px) {
-      body { padding: 14px; }
-      .grid, .diff-grid, .rule-list { grid-template-columns: 1fr; }
-      .metrics, .route-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-  </style>
+  <link rel="stylesheet" href="prompt-diff.css">
 </head>
 <body>
-  <main class="wrap">
-    <h1>Prompt Diff Lab／提示詞差異工具</h1>
-    <p class="sub">比較 Vibe Reading 原版與目前修正版 Gemini system prompt，也可貼入任意兩版 prompt。Diff 本身完全在本機處理；下方 Engine Mode 是全域翻譯測試設定。</p>
-
-    <section class="toolbar" aria-label="比較設定">
-      <div class="control">
-        <label for="targetLang">目標語言</label>
-        <select id="targetLang"></select>
+  <main class="lab-shell">
+    <header class="lab-header">
+      <div>
+        <h1>Prompt Diff Lab</h1>
+        <p>檢視提示詞、翻譯路由、速度與 Chrome 本機模型。</p>
       </div>
-      <div class="control">
-        <label for="diffMode">比較粒度</label>
-        <select id="diffMode">
-          <option value="token">逐詞／符號</option>
-          <option value="line">逐行</option>
-        </select>
+      <div class="header-actions">
+        <span id="labConnectionStatus" class="connection-status">尋找 PDF 文件…</span>
       </div>
-      <button id="loadBuiltin" type="button">載入原版 vs 現行版</button>
-      <button id="swapPrompts" type="button">交換左右</button>
-      <button id="clearPrompts" type="button">清空</button>
-    </section>
+    </header>
 
-    <section class="card" aria-label="翻譯路由測試">
-      <div class="head"><h2>Translation Routing／翻譯引擎測試</h2><span class="hint">會影響整個 Vibe Reading extension</span></div>
-      <div class="debug-row">
-        <div class="control">
-          <label for="engineMode">Engine Mode</label>
-          <select id="engineMode"></select>
+    <nav class="main-tabs segmented" role="tablist" aria-label="Prompt Diff Lab 功能">
+      <button id="mainTabPrompt" class="segment is-selected" type="button" role="tab" aria-selected="true" aria-controls="mainPanelPrompt" data-main-tab="prompt">提示詞比較</button>
+      <button id="mainTabDocuments" class="segment" type="button" role="tab" aria-selected="false" aria-controls="mainPanelDocuments" data-main-tab="documents">文件與路由</button>
+      <button id="mainTabBenchmark" class="segment" type="button" role="tab" aria-selected="false" aria-controls="mainPanelBenchmark" data-main-tab="benchmark">速度比較</button>
+      <button id="mainTabModels" class="segment" type="button" role="tab" aria-selected="false" aria-controls="mainPanelModels" data-main-tab="models">本機模型</button>
+    </nav>
+
+    <section id="mainPanelPrompt" class="main-panel" role="tabpanel" aria-labelledby="mainTabPrompt" data-main-panel="prompt">
+      <article class="surface prompt-workspace">
+        <header class="surface-header prompt-toolbar">
+          <div class="control-group">
+            <label for="targetLang">目標語言</label>
+            <select id="targetLang"></select>
+          </div>
+          <div class="control-group">
+            <label for="diffMode">比較粒度</label>
+            <select id="diffMode">
+              <option value="token">逐詞／符號</option>
+              <option value="line">逐行</option>
+            </select>
+          </div>
+          <div class="toolbar-spacer"></div>
+          <button id="loadBuiltin" class="button secondary" type="button">載入原版與現行版</button>
+          <button id="swapPrompts" class="button secondary" type="button">交換</button>
+          <button id="clearPrompts" class="button secondary" type="button">清空</button>
+        </header>
+
+        <nav class="compare-tabs segmented compact" role="tablist" aria-label="提示詞比較檢視">
+          <button id="compareTabEdit" class="segment is-selected" type="button" role="tab" aria-selected="true" aria-controls="comparePanelEdit" data-compare-tab="edit">編輯</button>
+          <button id="compareTabSide" class="segment" type="button" role="tab" aria-selected="false" aria-controls="comparePanelSide" data-compare-tab="side">並排差異</button>
+          <button id="compareTabUnified" class="segment" type="button" role="tab" aria-selected="false" aria-controls="comparePanelUnified" data-compare-tab="unified">Unified</button>
+          <button id="compareTabRules" class="segment" type="button" role="tab" aria-selected="false" aria-controls="comparePanelRules" data-compare-tab="rules">規則覆蓋</button>
+        </nav>
+
+        <div id="comparePanelEdit" class="compare-panel" role="tabpanel" aria-labelledby="compareTabEdit" data-compare-panel="edit">
+          <div class="editor-grid">
+            <section class="editor-pane">
+              <div class="pane-title"><strong>原版</strong><span id="leftLabel">v1.4 baseline</span></div>
+              <textarea id="beforePrompt" spellcheck="false" aria-label="原版提示詞"></textarea>
+            </section>
+            <section class="editor-pane">
+              <div class="pane-title"><strong>修正版</strong><span id="rightLabel">current branch</span></div>
+              <textarea id="afterPrompt" spellcheck="false" aria-label="修正版提示詞"></textarea>
+            </section>
+          </div>
         </div>
-        <label class="check-row"><input id="diagnosticsVerbose" type="checkbox"> 在翻譯狀態列顯示診斷</label>
-        <button id="refreshDiagnostics" type="button">重新讀取診斷</button>
-        <button id="clearDiagnostics" type="button">清除診斷</button>
-      </div>
-      <div class="route-note" id="routingExplanation">Auto：無辭庫命中時優先 Translator；命中術語時改走 Gemini，Gemini 不可用才退回 Translator placeholder。</div>
-      <div class="metrics route-metrics" aria-label="翻譯診斷">
-        <div class="metric"><strong id="diagMode">—</strong><span>Mode</span></div>
-        <div class="metric"><strong id="diagRoute">—</strong><span>Base → Effective</span></div>
-        <div class="metric"><strong id="diagLoaded">0</strong><span>Glossary Loaded</span></div>
-        <div class="metric"><strong id="diagMatched">0</strong><span>Matched</span></div>
-        <div class="metric"><strong id="diagApplied">0</strong><span>Applied</span></div>
-        <div class="metric"><strong id="diagGlossary">—</strong><span>Glossary</span></div>
-        <div class="metric"><strong id="diagTarget">—</strong><span>Target</span></div>
-        <div class="metric"><strong id="diagFallback">—</strong><span>Fallback</span></div>
-      </div>
-      <div class="hint" id="diagTime">尚未收到翻譯診斷。請在另一個頁面或 PDF 執行一次翻譯。</div>
-      <ul class="matched-list" id="matchedTerms"></ul>
+
+        <div id="comparePanelSide" class="compare-panel" role="tabpanel" aria-labelledby="compareTabSide" data-compare-panel="side" hidden>
+          <div class="diff-grid">
+            <div id="beforeDiff" class="diff-pane" aria-label="原版差異"></div>
+            <div id="afterDiff" class="diff-pane" aria-label="修正版差異"></div>
+          </div>
+          <div class="legend"><span><i class="legend-delete"></i>刪除或被取代</span><span><i class="legend-add"></i>新增或替代</span></div>
+        </div>
+
+        <div id="comparePanelUnified" class="compare-panel" role="tabpanel" aria-labelledby="compareTabUnified" data-compare-panel="unified" hidden>
+          <div id="unifiedDiff" class="diff-pane unified-diff" aria-label="統一差異"></div>
+        </div>
+
+        <div id="comparePanelRules" class="compare-panel" role="tabpanel" aria-labelledby="compareTabRules" data-compare-panel="rules" hidden>
+          <div id="ruleList" class="rule-list"></div>
+        </div>
+
+        <footer class="prompt-footer">
+          <div class="compact-metrics" aria-label="提示詞差異統計">
+            <span><strong id="beforeChars">0</strong> 原版字元</span>
+            <span><strong id="afterChars">0</strong> 修正版字元</span>
+            <span><strong id="addedCount">0</strong> 新增</span>
+            <span><strong id="removedCount">0</strong> 刪除</span>
+            <span><strong id="similarity">100%</strong> 相似度</span>
+          </div>
+          <span id="modeHint" class="footer-hint">逐詞／符號</span>
+        </footer>
+      </article>
+      <p id="status" class="page-status" aria-live="polite"></p>
     </section>
 
-    <section class="grid">
-      <div class="card">
-        <div class="head"><h2>原版 / Before</h2><span class="badge" id="leftLabel">v1.4 baseline</span></div>
-        <textarea id="beforePrompt" spellcheck="false" aria-label="原版提示詞"></textarea>
-      </div>
-      <div class="card">
-        <div class="head"><h2>修正版 / After</h2><span class="badge" id="rightLabel">current branch</span></div>
-        <textarea id="afterPrompt" spellcheck="false" aria-label="修正版提示詞"></textarea>
-      </div>
+    <section id="mainPanelDocuments" class="main-panel" role="tabpanel" aria-labelledby="mainTabDocuments" data-main-panel="documents" hidden>
+      <header class="panel-header">
+        <div><h2>開啟中的 PDF</h2><p>選取文件後，可在速度比較中使用同一組段落測試三種路由。</p></div>
+        <button id="refreshDocuments" class="button secondary" type="button">重新搜尋</button>
+      </header>
+      <div id="documentsList" class="documents-list"></div>
     </section>
 
-    <section class="metrics" aria-label="差異統計">
-      <div class="metric"><strong id="beforeChars">0</strong><span>Before 字元</span></div>
-      <div class="metric"><strong id="afterChars">0</strong><span>After 字元</span></div>
-      <div class="metric"><strong id="addedCount">0</strong><span>新增單位</span></div>
-      <div class="metric"><strong id="removedCount">0</strong><span>刪除單位</span></div>
-      <div class="metric"><strong id="similarity">100%</strong><span>內容相似度</span></div>
+    <section id="mainPanelBenchmark" class="main-panel" role="tabpanel" aria-labelledby="mainTabBenchmark" data-main-panel="benchmark" hidden>
+      <article class="surface benchmark-surface">
+        <header class="panel-header inside">
+          <div><h2>翻譯速度比較</h2><p id="benchmarkDocumentSummary">請先在「文件與路由」選擇一份 PDF。</p></div>
+        </header>
+        <div class="benchmark-controls">
+          <div class="control-group">
+            <label for="benchmarkSampleSize">測試段落</label>
+            <select id="benchmarkSampleSize">
+              <option value="3">3 段</option>
+              <option value="5" selected>5 段</option>
+              <option value="10">10 段</option>
+              <option value="20">20 段</option>
+            </select>
+          </div>
+          <fieldset class="mode-checks">
+            <legend>翻譯模式</legend>
+            <label><input id="benchmarkModeTranslator" type="checkbox" checked> Translator API</label>
+            <label><input id="benchmarkModeAuto" type="checkbox" checked> 混合</label>
+            <label><input id="benchmarkModeGemini" type="checkbox" checked> Gemini Nano</label>
+          </fieldset>
+          <label class="inline-check"><input id="benchmarkWarmup" type="checkbox" checked> 每種模式先暖機一次</label>
+          <div class="toolbar-spacer"></div>
+          <button id="benchmarkStart" class="button primary" type="button">開始比較</button>
+          <button id="benchmarkStop" class="button danger" type="button" disabled>停止</button>
+        </div>
+        <div class="benchmark-progress-wrap">
+          <progress id="benchmarkProgress" value="0" max="1"></progress>
+          <span id="benchmarkProgressLabel">尚未開始</span>
+        </div>
+        <div class="table-wrap">
+          <table class="results-table">
+            <thead>
+              <tr>
+                <th>模式</th><th>實際路由</th><th>成功</th><th>平均時間</th><th>中位數</th><th>字元／秒</th><th>估算 tokens/s</th><th>辭庫</th><th>Fallback</th>
+              </tr>
+            </thead>
+            <tbody id="benchmarkResultsBody"></tbody>
+          </table>
+        </div>
+        <p class="method-note">tokens/s 為端到端估算值；elapsed time 與 characters/s 為精確量測。Translator API 不公開 tokenizer，Gemini Nano 也不公開實際 tokenization。</p>
+        <p id="benchmarkStatus" class="page-status" aria-live="polite"></p>
+      </article>
     </section>
 
-    <section class="card">
-      <div class="head"><h2>並排差異</h2><span class="hint" id="modeHint">逐詞／符號</span></div>
-      <div class="diff-grid">
-        <div class="diff-pane" id="beforeDiff" aria-label="原版差異"></div>
-        <div class="diff-pane" id="afterDiff" aria-label="修正版差異"></div>
-      </div>
-      <div class="legend"><span><i class="l-del"></i>刪除／被取代</span><span><i class="l-add"></i>新增／替代</span></div>
+    <section id="mainPanelModels" class="main-panel" role="tabpanel" aria-labelledby="mainTabModels" data-main-panel="models" hidden>
+      <header class="panel-header">
+        <div><h2>Chrome 本機模型</h2><p>只顯示公開 API 可取得的資料；位置與精確大小不做推測。</p></div>
+        <div class="panel-actions"><button id="refreshModelInfo" class="button secondary" type="button">重新偵測</button><button id="copyOnDeviceUrl" class="button secondary" type="button">複製內部頁面網址</button></div>
+      </header>
+      <div id="modelCards" class="model-cards"></div>
+      <p id="modelInfoStatus" class="page-status" aria-live="polite"></p>
     </section>
-
-    <section class="card unified">
-      <div class="head"><h2>Unified Diff</h2><span class="hint">同一視圖快速檢查增刪</span></div>
-      <div class="diff-pane" id="unifiedDiff" aria-label="統一差異"></div>
-    </section>
-
-    <section class="card analysis">
-      <div class="head"><h2>翻譯 Prompt 規則覆蓋</h2><span class="hint">依文字特徵檢查；不是模型品質評分</span></div>
-      <div class="rule-list" id="ruleList"></div>
-    </section>
-
-    <div class="status" id="status" aria-live="polite"></div>
   </main>
 
   <script src="translate-core.js"></script>
   <script src="prompt-diff.js"></script>
+  <script src="lab-document-sessions.js"></script>
+  <script src="lab-benchmark.js"></script>
+  <script src="lab-model-info.js"></script>
 </body>
 </html>
