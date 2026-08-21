@@ -6,7 +6,7 @@ Vibe Reading 的「專業辭庫」是**由使用者自行決定是否開啟**的
 
 ## 格式相容性
 
-專業辭庫相容 Immersive Translate terms 使用的 CSV 欄位格式：
+專業辭庫相容 [Immersive Translate](https://github.com/immersive-translate/) 專案所使用之 terms 資料的 CSV 欄位格式：
 
 ```csv
 source,target,tgt_lng
@@ -20,7 +20,7 @@ API,API,auto
 - `tgt_lng`：目標語言；留白或 `auto` 表示所有目標語言。
 - Vibe Reading 會將 `zh-TW` / `zh-HK` / `zh-MO` 視為與 `zh-Hant` 相容，將 `zh-CN` / `zh-SG` 視為與 `zh-Hans` 相容。
 
-「格式相容」只表示 Vibe Reading 能讀取同樣的資料結構，**不表示 Vibe Reading 內建、重新散布、轉授權或保證任何第三方辭庫內容**。
+「格式相容」只表示 Vibe Reading 能讀取同樣的資料結構，**不表示 Vibe Reading 內建、重新散布、轉授權、維護或保證任何第三方辭庫內容**。
 
 ## 如何開啟
 
@@ -31,20 +31,24 @@ API,API,auto
 1. **載入本機 CSV**：選擇電腦中的辭庫檔案。
 2. **直接貼上 CSV**：把辭庫文字貼到設定欄位後儲存。
 3. **遠端辭庫來源**：
-   - 推薦：填入公開 GitHub 的辭庫目錄網址，讀取目錄後勾選一個或多個 CSV。
-   - 進階：直接填入單一 CSV URL。
+   - GitHub 目錄：自行填入可信任的公開 GitHub 辭庫目錄網址，讀取目錄後勾選一個或多個 CSV。
+   - 直接 CSV URL：自行填入單一 CSV URL。
 
 ## GitHub 辭庫目錄模式
 
-推薦的設定方式是直接填入 GitHub 目錄頁，例如：
+若要使用遠端辭庫，可自行指定任何可信任、公開且符合支援格式的 GitHub 目錄。Vibe Reading 不預設綁定特定第三方目錄。
+
+作為格式與資料組織方式的參考，可查閱 [Immersive Translate 專案主頁](https://github.com/immersive-translate/)；其 terms glossary 參考位置如下，僅以純文字呈現：
 
 ```text
 https://github.com/immersive-translate/terms/tree/main/glossaries
 ```
 
+此位置僅作為格式與目錄結構參考，**不代表 Vibe Reading 內建、維護、鏡像、預選或依賴該資料來源**。
+
 操作流程：
 
-1. 選擇「GitHub 辭庫目錄（推薦）」。
+1. 選擇「GitHub 辭庫目錄」。
 2. 貼上 GitHub `/tree/<branch>/<folder>` 目錄網址。
 3. 按「讀取辭庫清單」。
 4. Vibe Reading 只讀取該目錄中的 `.csv` 檔案資訊，並顯示成可搜尋、可勾選的清單。
@@ -53,7 +57,7 @@ https://github.com/immersive-translate/terms/tree/main/glossaries
 7. 按「匯入目前選取的辭庫」。
 8. 如有需要，再開啟「自動動態匯入」。
 
-設定頁也提供「填入 Immersive Translate terms 範例」按鈕，作用只是把上述 GitHub 目錄網址填入欄位；**不會在未經使用者操作的情況下自動連線、選取或下載任何第三方辭庫。**
+設定頁只會在使用者明確指定來源、確認責任並執行匯入後才讀取遠端辭庫；**不會在未經使用者操作的情況下自動選取或下載任何第三方辭庫。**
 
 目前自動列目錄支援公開 `github.com` repository 的標準 tree URL。目錄讀取使用 GitHub 公開 Contents API，因此未登入的公開 API 查詢可能受到 GitHub rate limit 限制。
 
@@ -170,4 +174,4 @@ Vibe Reading 不會自動替使用者選擇、連線或下載第三方辭庫。�
 - 詞條是否適合你的領域與目標語言；
 - 第三方資料變更是否可能影響翻譯結果。
 
-對 Immersive Translate terms 的支援是**格式與 GitHub 目錄讀取相容**；Vibe Reading 不內建、鏡像、重新散布或轉授權其資料。
+對 Immersive Translate terms 的支援是**格式與 GitHub 目錄讀取相容**；Vibe Reading 不內建、鏡像、維護、重新散布、轉授權或依賴其資料。
