@@ -8,6 +8,7 @@
   const legacyBadge = document.getElementById('aiBadge');
   const targetLang = document.getElementById('targetLang');
   const translateBtn = document.getElementById('translateBtn');
+  const srcLangInfo = document.getElementById('srcLangInfo');
   if (!VT || !legacyBadge || !targetLang || !translateBtn) return;
 
   const MODE_LABELS = {
@@ -99,13 +100,39 @@
     } catch (_) {}
   }
 
+  function currentProbeSource(target) {
+    try {
+      if (typeof detectedSource !== 'undefined' && detectedSource && isPdfReady()) {
+        return detectedSource;
+      }
+    } catch (_) {}
+
+    const label = srcLangInfo?.textContent || '';
+    const match = label.match(/[:：]\s*([A-Za-z0-9-]+)/);
+    if (match?.[1]) return match[1];
+
+    // Before the PDF source language is known, retain a harmless availability
+    // fallback. The srcLangInfo MutationObserver below immediately re-probes with
+    // the actual detected source as soon as viewer.js publishes it.
+    return target === 'en' ? 'fr' : 'en';
+  }
+
   async function probeAvailability(target) {
-    const result = { translator: false, gemini: false, translatorState: 'unavailable', geminiState: 'unavailable' };
-    const probeSource = target === 'en' ? 'fr' : 'en';
+    const result = {
+      translator: false,
+      gemini: false,
+      translatorState: 'unavailable',
+      geminiState: 'unavailable',
+      sourceLanguage: currentProbeSource(target),
+      targetLanguage: target,
+    };
 
     if ('Translator' in self) {
       try {
-        const state = await Translator.availability({ sourceLanguage: probeSource, targetLanguage: target });
+        const state = await Translator.availability({
+          sourceLanguage: result.sourceLanguage,
+          targetLanguage: target,
+        });
         result.translatorState = state;
         result.translator = state !== 'unavailable';
       } catch (_) {}
@@ -149,7 +176,8 @@
     if (!currentModeReady) select.classList.add('mode-error');
     else if (mode === 'auto' && !(availability.translator && availability.gemini)) select.classList.add('mode-degraded');
 
-    const availableText = `Translator ${availability.translator ? '✓' : '×'} / Gemini ${availability.gemini ? '✓' : '×'}`;
+    const pair = `${availability.sourceLanguage || '—'} → ${availability.targetLanguage || targetLang.value || '—'}`;
+    const availableText = `${pair} · Translator ${availability.translator ? '✓' : '×'} / Gemini ${availability.gemini ? '✓' : '×'}`;
     const degraded = mode === 'auto' && currentModeReady && !(availability.translator && availability.gemini)
       ? '目前只有一種引擎可用，混合模式會退化運作。'
       : '';
@@ -240,6 +268,13 @@
   targetLang.addEventListener('change', () => {
     setTimeout(() => refreshEngineControl().catch(() => {}), 0);
   });
+
+  if (srcLangInfo) {
+    const sourceObserver = new MutationObserver(() => {
+      refreshEngineControl().catch(() => {});
+    });
+    sourceObserver.observe(srcLangInfo, { childList: true, characterData: true, subtree: true });
+  }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
