@@ -221,12 +221,6 @@
     return { output, contextOutput };
   }
 
-  async function createEngine(sourceLang, targetLang, mode) {
-    if (sourceLang === targetLang) sourceLang = sourceLang === 'en' ? 'fr' : 'en';
-    const glossary = typeof VT.loadGlossary === 'function' ? await VT.loadGlossary(targetLang) : [];
-    return { sourceLang, targetLang, mode, glossary, translator: null, session: null };
-  }
-
   async function translateRecord(engine, text) {
     const terms = typeof VT.glossaryTermsForText === 'function' ? VT.glossaryTermsForText(text, engine.glossary) : [];
     const started = performance.now();
