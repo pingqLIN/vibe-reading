@@ -328,8 +328,6 @@ let transFont = FONT_DEFAULT;
 
 function applyTransFont(px) {
   transFont = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
-  // set on the root so both the translation list (#results) and the
-  // AI summary card (#summary, a sibling of #results) inherit it
   document.documentElement.style.setProperty('--trans-font', transFont + 'px');
   chrome.storage.local.set({ transFont });
 }
@@ -387,12 +385,12 @@ function showPdfSource() {
   els.pdfSource.textContent = isFile ? `📁 本機檔案：${fname}` : `🌐 ${pdfUrl}`;
   els.pdfSource.title = pdfUrl;
   els.pdfSource.onclick = () => window.open(pdfUrl, '_blank');
-  document.title = `[氛圍閱讀] ${fname}`;   // provisional; refined after metadata loads
+  document.title = `[氛圍閱讀] ${fname}`;
 }
 
-// ─── Load & render PDF (canvas + selectable text layer) ─────────────────────────
-let baseScale = 1;   // fit-to-width scale
-let zoom      = 1;   // user zoom multiplier
+// ─── Load & render PDF ─────────────────────────────────────────────────────────
+let baseScale = 1;
+let zoom      = 1;
 
 async function loadAndRenderPdf() {
   setStatus('下載 PDF 檔案...');
@@ -406,14 +404,12 @@ async function loadAndRenderPdf() {
 
   pdfDoc = await PDFJS.getDocument({ data: buf }).promise;
 
-  // Tab title = [氛圍閱讀] <PDF metadata title, else filename>
   try {
     const meta = await pdfDoc.getMetadata();
     const docTitle = meta?.info?.Title?.trim();
     if (docTitle) document.title = `[氛圍閱讀] ${docTitle}`;
   } catch (_) {}
 
-  // fit-to-width base scale
   const firstPage = await pdfDoc.getPage(1);
   const base = firstPage.getViewport({ scale: 1 });
   const paneW = els.pdfPane.clientWidth - 48;
@@ -426,9 +422,6 @@ async function loadAndRenderPdf() {
   updateZoomLabel();
 }
 
-// Render (or re-render) every page at the current renderScale.
-// Paragraphs are only extracted on the first pass (their rects are in
-// scale-independent PDF coordinates, so zooming doesn't require recompute).
 async function renderPages(computeParagraphs) {
   const dpr = window.devicePixelRatio || 1;
   const total = pdfDoc.numPages;
@@ -460,9 +453,6 @@ async function renderPages(computeParagraphs) {
     const content = await page.getTextContent();
     await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderVp }).promise;
 
-    // Transparent text layer for native text selection (requirement 6).
-    // pdf.js 3.x positions the spans via the CSS var --scale-factor; without it
-    // the spans collapse to zero size and the text becomes unselectable.
     const textLayer = document.createElement('div');
     textLayer.className = 'textLayer';
     textLayer.style.width  = viewport.width + 'px';
@@ -477,7 +467,7 @@ async function renderPages(computeParagraphs) {
 
     pageWraps[p] = {
       wrap, canvas, textLayer, viewport,
-      w1: viewport.width  / renderScale,   // intrinsic (scale-1) dimensions
+      w1: viewport.width  / renderScale,
       h1: viewport.height / renderScale,
     };
 
@@ -489,30 +479,25 @@ async function renderPages(computeParagraphs) {
   }
 }
 
-// ─── Zoom (independent of browser page zoom) ─────────────────────────────────────
+// ─── Zoom ─────────────────────────────────────────────────────────────────────
 let rerenderT = null;
 
 function updateZoomLabel() {
   if (els.zoomLabel) els.zoomLabel.textContent = Math.round(zoom * 100) + '%';
 }
 
-// Zoom around a focal point. The anchor is captured as a specific PAGE plus a
-// fraction within that page (measured from real element rects), so the constant
-// inter-page gaps/padding don't distort it — after re-render the same page point
-// is placed back under the focal Y. Fixes both figure drift and wrong-page jumps.
 function setZoom(z, focalClientY) {
   if (!pdfDoc) return;
   const fcY = (focalClientY != null)
     ? focalClientY
     : els.pdfPane.getBoundingClientRect().top + els.pdfPane.clientHeight / 2;
 
-  // capture which page + intra-page fraction sits at the focal Y (old layout)
   let anchorPage = null, anchorFy = 0.5;
   for (const k in pageWraps) {
     const r = pageWraps[k].wrap.getBoundingClientRect();
     if (fcY >= r.top && fcY <= r.bottom) { anchorPage = Number(k); anchorFy = (fcY - r.top) / r.height; break; }
   }
-  if (anchorPage == null) {              // focal in a gap → use nearest page centre
+  if (anchorPage == null) {
     let bd = Infinity;
     for (const k in pageWraps) {
       const r = pageWraps[k].wrap.getBoundingClientRect();
@@ -525,14 +510,9 @@ function setZoom(z, focalClientY) {
   renderScale = baseScale * zoom;
   updateZoomLabel();
 
-  // 1) Instant, smooth: stretch existing canvases via CSS and rescale the text
-  //    layer through --scale-factor (its span positions are in scale-1 units,
-  //    so they follow the variable). No re-rasterising → no flash, no lag.
   applyDisplayScale(renderScale);
   anchorScroll(anchorPage, anchorFy, fcY);
 
-  // 2) After the gesture settles, re-rasterise in place to sharpen (no DOM
-  //    rebuild → no flash, no scroll jump). Visible pages are sharpened first.
   clearTimeout(rerenderT);
   rerenderT = setTimeout(() => sharpenPages(), 200);
 }
@@ -542,8 +522,6 @@ async function sharpenPages() {
   if (!pdfDoc) return;
   const gen = ++sharpenGen;
   const dpr = window.devicePixelRatio || 1;
-
-  // order: pages currently in view first, then the rest
   const paneRect = els.pdfPane.getBoundingClientRect();
   const vis = [], rest = [];
   for (let p = 1; p <= pdfDoc.numPages; p++) {
@@ -553,7 +531,7 @@ async function sharpenPages() {
   }
 
   for (const p of vis.concat(rest)) {
-    if (gen !== sharpenGen) return;           // a newer zoom superseded us
+    if (gen !== sharpenGen) return;
     const pg = pageWraps[p]; if (!pg) continue;
     const page = await pdfDoc.getPage(p);
     if (gen !== sharpenGen) return;
@@ -564,11 +542,10 @@ async function sharpenPages() {
     pg.canvas.style.width  = (pg.w1 * sc) + 'px';
     pg.canvas.style.height = (pg.h1 * sc) + 'px';
     await page.render({ canvasContext: pg.canvas.getContext('2d'), viewport: renderVp }).promise;
-    pg.viewport = page.getViewport({ scale: sc });   // keep locate()/zoom anchor accurate
+    pg.viewport = page.getViewport({ scale: sc });
   }
 }
 
-// Live CSS resize of all pages (cheap; bitmap is GPU-scaled until re-rasterised)
 function applyDisplayScale(scale) {
   for (const k in pageWraps) {
     const pg = pageWraps[k];
@@ -584,7 +561,6 @@ function applyDisplayScale(scale) {
   }
 }
 
-// Keep a given page + intra-page fraction anchored under the focal screen Y
 function anchorScroll(page, fy, fcY) {
   const pg = pageWraps[page];
   if (!pg) return;
@@ -596,8 +572,6 @@ function setupZoom() {
   els.zoomIn.addEventListener('click', () => setZoom(zoom * 1.2));
   els.zoomOut.addEventListener('click', () => setZoom(zoom / 1.2));
   els.zoomFit.addEventListener('click', () => setZoom(1));
-  // Ctrl+wheel / trackpad pinch zooms ONLY the PDF pane (preventDefault stops
-  // the browser from zooming the whole page), anchored at the cursor.
   els.pdfPane.addEventListener('wheel', (e) => {
     if (!e.ctrlKey) return;
     e.preventDefault();
@@ -605,21 +579,19 @@ function setupZoom() {
   }, { passive: false });
 }
 
-// Arrow keys / PageUp-Down / Home-End scroll the PDF pane (the div has no native
-// keyboard scrolling like Chrome's built-in viewer does).
 function setupKeyboardScroll() {
   document.addEventListener('keydown', (e) => {
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-    if (els.askModal.style.display !== 'none') return;   // modal/Esc handles its own keys
+    if (els.askModal.style.display !== 'none') return;
 
     const pane = els.pdfPane;
     const line = 90, page = pane.clientHeight * 0.9;
     switch (e.key) {
       case 'ArrowDown':  pane.scrollTop += line; break;
       case 'ArrowUp':    pane.scrollTop -= line; break;
-      case 'ArrowRight': gotoPage(1);  break;   // next page
-      case 'ArrowLeft':  gotoPage(-1); break;   // previous page
+      case 'ArrowRight': gotoPage(1);  break;
+      case 'ArrowLeft':  gotoPage(-1); break;
       case 'PageDown':   pane.scrollTop += page; break;
       case 'PageUp':     pane.scrollTop -= page; break;
       case 'Home':       pane.scrollTop  = 0; break;
@@ -630,7 +602,6 @@ function setupKeyboardScroll() {
   });
 }
 
-// Jump to the previous/next page (←/→), like the native PDF viewer
 function gotoPage(delta) {
   if (!pdfDoc) return;
   const paneTop = els.pdfPane.getBoundingClientRect().top;
@@ -645,15 +616,11 @@ function gotoPage(delta) {
 }
 
 function extractParagraphs(items) {
-  // Keep non-empty, horizontal text only — drop rotated items such as the
-  // vertical "arXiv:…" watermark, which otherwise corrupts margin/column geometry.
   const its = items.filter(it =>
     it.str.trim() &&
     Math.abs(it.transform[1]) < 2 && Math.abs(it.transform[2]) < 2);
   if (!its.length) return [];
 
-  // Build visual line fragments first. PDF.js may emit either whole-line items
-  // or word/run-level items; column detection on raw items is therefore brittle.
   const lines = buildVisualLines(its);
   if (!lines.length) return [];
 
@@ -825,52 +792,28 @@ function paragraphsFromLines(lines) {
   const L = lines.slice().sort(lineCompare).filter(l => l.text);
   if (!L.length) return [];
 
-  // Dominant left margin = most common startX (robust to outliers like
-  // footnotes/indents); right margin = widest line. Avoids treating every
-  // body line as "indented" when a stray element sits far to the left.
   const startBins = {};
   for (const l of L) { const k = Math.round(l.startX / 3) * 3; startBins[k] = (startBins[k] || 0) + 1; }
   const leftMargin = Number(Object.entries(startBins).sort((a, b) => b[1] - a[1])[0][0]);
   const rightEdge  = Math.max(...L.map(l => l.endX));
   const colWidth   = Math.max(1, rightEdge - leftMargin);
 
-  const indentTol = Math.max(12, colWidth * 0.025);  // first-line indent
-  const shortTol  = Math.max(16, colWidth * 0.15);   // ragged last line of a paragraph
-
-  // Is this block justified (flush right margin)? If so, a line stopping short of
-  // the right edge marks a paragraph end. For ragged / left-aligned text MOST
-  // lines stop short, so that test would split every single line into its own
-  // paragraph — there, rely on vertical gap + indent only.
+  const indentTol = Math.max(12, colWidth * 0.025);
+  const shortTol  = Math.max(16, colWidth * 0.15);
   const justified = L.filter(l => l.endX > rightEdge - shortTol).length >= L.length * 0.6;
 
-  // Typical in-paragraph line gap for THIS block. A paragraph break is a gap
-  // clearly larger than that — measured relative to the block's own leading, so
-  // loosely-leaded text isn't split on every line, and not tied to the
-  // (unreliable) reported glyph height.
   const gaps = [];
   for (let i = 1; i < L.length; i++) gaps.push(Math.abs(L[i - 1].y - L[i].y));
   const sortedGaps = gaps.slice().sort((a, b) => a - b);
   const medianGap = sortedGaps.length ? sortedGaps[Math.floor(sortedGaps.length / 2)] : 0;
 
-  // Split into paragraphs. indent/short tests are guarded against centred lines
-  // (titles, author blocks) which inset on both sides.
   const groups = [];
   let g = [L[0]];
   for (let i = 1; i < L.length; i++) {
     const prev = L[i - 1], cur = L[i];
     const fh = Math.max(prev.fontH, cur.fontH) || 12;
-
-    // Paragraph break on a clear vertical gap (relative to local font size, so
-    // large-font titles stay intact) or a first-line indent. The previous
-    // "short last line" rule was dropped — superscript/footnote markers and
-    // ragged line ends made it over-segment paragraphs into fragments.
     const bigGap       = Math.abs(prev.y - cur.y) > fh * 1.4;
     const reachesRight = cur.endX > rightEdge - shortTol;
-    // First-line indent is judged against NEIGHBOURING lines, not the global
-    // page margin: a real paragraph-initial line is inset relative to the line
-    // below it (which returns to the block's left edge). Blocks that are inset
-    // as a whole (e.g. JMLR abstracts) have equal startX on every line, so they
-    // no longer split line-by-line.
     const nxt          = L[i + 1];
     const blockLeft    = Math.min(prev.startX, nxt ? nxt.startX : prev.startX);
     const indented     = cur.startX > blockLeft + indentTol && reachesRight;
@@ -894,13 +837,9 @@ function paragraphsFromLines(lines) {
   }).filter(p => p.text.length > 20);
 }
 
-// ─── Translation engine ─────────────────────────────────────────────────────────
-// detectSourceLang / initTranslator / doTranslate are provided by translate-core.js
-// (window.VibeTranslate) and shared with the in-page content script (content.js).
-
 // ─── Translation flow ───────────────────────────────────────────────────────────
 async function startTranslation(isManual) {
-  if (abortCtrl) return; // already running
+  if (abortCtrl) return;
   clearError();
   els.results.innerHTML = '';
 
@@ -923,9 +862,6 @@ async function startTranslation(isManual) {
     segEls = shells;
     const concurrency = translatorObj.type === 'translator' ? 4 : 1;
 
-    // Requirement 5 — generate AI summary with Nano.
-    // If translation uses NMT (different model), run summary concurrently;
-    // if translation already uses Nano, defer summary to avoid contention.
     if (!summaryDone && translatorObj.type === 'translator') generateSummary();
 
     let done = 0, nextIdx = 0;
@@ -950,7 +886,7 @@ async function startTranslation(isManual) {
     if (!signal.aborted) {
       setProgress(1, '完成');
       setStatus(`完成！共翻譯 ${total} 段（點任一段可定位原文）`);
-      if (!summaryDone) generateSummary(); // deferred case
+      if (!summaryDone) generateSummary();
     }
   } catch (e) {
     if (e.name !== 'AbortError') {
@@ -969,7 +905,7 @@ async function startTranslation(isManual) {
   }
 }
 
-// ─── AI Summary (requirement 5, Gemini Nano) ─────────────────────────────────────
+// ─── AI Summary ────────────────────────────────────────────────────────────────
 async function generateSummary() {
   if (summaryDone) return;
   if (!('LanguageModel' in self)) return;
@@ -983,10 +919,10 @@ async function generateSummary() {
 
   try {
     const session = await LanguageModel.create({
+      samplingMode: 'most-predictable',
       initialPrompts: [{ role: 'system', content: '你是學術論文分析助理，使用繁體中文、精煉地回答。' }],
     });
 
-    // Nano has a limited context window — cap the input text.
     const fullText = paragraphs.map(p => p.text).join('\n');
     const text = fullText.slice(0, 7000);
 
@@ -1017,7 +953,7 @@ async function generateSummary() {
       obj = JSON.parse(raw.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
     }
 
-    summaryObj = obj;          // reused as global context for the ask-AI feature
+    summaryObj = obj;
     renderSummary(obj);
     session.destroy();
   } catch (e) {
@@ -1053,7 +989,7 @@ function renderSummary(obj) {
     sec('📝', '總結 Conclusion', obj.conclusion);
 }
 
-// ─── Segment UI + click-to-locate ───────────────────────────────────────────────
+// ─── Segment UI ────────────────────────────────────────────────────────────────
 function appendSegment(para, idx) {
   const div = document.createElement('div');
   div.className = 'segment';
@@ -1066,11 +1002,9 @@ function appendSegment(para, idx) {
     <div class="seg-orig">${esc(para.text)}</div>
     <div class="seg-trans loading">翻譯中…</div>`;
   div.addEventListener('click', (e) => {
-    if (e.target.closest('.seg-edit')) return;   // don't locate while editing
+    if (e.target.closest('.seg-edit')) return;
     locate(idx, div);
   });
-  // Double-click the translation → inline edit mode (fix wording, re-paragraph
-  // with Enter). Blur or Ctrl+Enter saves; Esc cancels.
   div.addEventListener('dblclick', (e) => {
     const t = e.target.closest('.seg-trans');
     if (t && !t.classList.contains('loading')) enterEditMode(t);
@@ -1080,7 +1014,7 @@ function appendSegment(para, idx) {
 }
 
 function enterEditMode(transEl) {
-  if (transEl.querySelector('.seg-edit')) return;   // already editing
+  if (transEl.querySelector('.seg-edit')) return;
   const original = transEl.textContent;
 
   const ta = document.createElement('textarea');
@@ -1088,7 +1022,6 @@ function enterEditMode(transEl) {
   ta.value = original;
   transEl.textContent = '';
   transEl.appendChild(ta);
-  // size to content
   ta.style.height = 'auto';
   ta.style.height = Math.min(400, ta.scrollHeight + 4) + 'px';
   ta.focus();
@@ -1107,11 +1040,10 @@ function enterEditMode(transEl) {
   };
   ta.addEventListener('blur', () => finish(true));
   ta.addEventListener('keydown', (e) => {
-    e.stopPropagation();                             // keep panel hotkeys out
+    e.stopPropagation();
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ta.blur(); }
     else if (e.key === 'Escape') finish(false);
   });
-  // keep clicks inside the editor from bubbling to the locate handler
   ['click', 'mouseup', 'mousedown', 'dblclick'].forEach(ev =>
     ta.addEventListener(ev, (e) => e.stopPropagation()));
 }
@@ -1145,10 +1077,9 @@ function locate(idx, segEl) {
   hl.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-// ─── Reverse: click original text on the left → highlight translation on right ───
+// ─── Reverse locate ────────────────────────────────────────────────────────────
 function setupReverseLocate() {
   els.pdfInner.addEventListener('click', (e) => {
-    // If the user just made a text selection, leave it for the "ask AI" flow
     const sel = window.getSelection();
     if (sel && sel.toString().trim().length >= 2) return;
 
@@ -1181,7 +1112,6 @@ function findParagraphAt(page, px, py) {
     const dy = Math.abs(cy - py);
     if (dy < nearestDy) { nearestDy = dy; nearest = i; }
   }
-  // exact hit preferred; otherwise the vertically closest paragraph (within reason)
   if (best >= 0) return best;
   return nearestDy < 40 ? nearest : -1;
 }
@@ -1190,15 +1120,13 @@ function reverseLocate(idx, pg, para) {
   const seg = segEls[idx];
   if (!seg) return;
 
-  // highlight the segment on the right
   document.querySelectorAll('.seg-active').forEach(e => e.classList.remove('seg-active'));
   seg.classList.add('seg-active');
   seg.classList.remove('seg-flash');
-  void seg.offsetWidth;            // restart CSS animation
+  void seg.offsetWidth;
   seg.classList.add('seg-flash');
   seg.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-  // also draw the highlight box on the PDF for visual confirmation
   document.querySelectorAll('.hl').forEach(e => e.remove());
   const [ax, ay] = pg.viewport.convertToViewportPoint(para.rect.x0, para.rect.y0);
   const [bx, by] = pg.viewport.convertToViewportPoint(para.rect.x1, para.rect.y1);
@@ -1212,7 +1140,7 @@ function reverseLocate(idx, pg, para) {
   pg.wrap.appendChild(hl);
 }
 
-// ─── Selection → ask Gemini Nano (requirement 6) ─────────────────────────────────
+// ─── Selection → ask Gemini Nano ──────────────────────────────────────────────
 function setupSelectionAsk() {
   els.pdfPane.addEventListener('mouseup', () => {
     setTimeout(() => {
@@ -1237,16 +1165,12 @@ function setupSelectionAsk() {
     openAskModal(selectedText);
   });
 
-  // Quick-translate: reuse the same panel, but skip the question flow and
-  // immediately show the translation of the selected text.
   els.askFloatTrans.addEventListener('click', () => {
     els.askFloat.style.display = 'none';
     openAskModal(selectedText, 'translate');
     quickTranslateSelection(selectedText);
   });
 
-  // Only the ✕ button or Escape close the modal — NOT clicking the backdrop,
-  // which made it dismiss far too easily.
   els.askClose.addEventListener('click', closeAskModal);
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && els.askModal.style.display !== 'none') closeAskModal();
@@ -1255,12 +1179,10 @@ function setupSelectionAsk() {
   els.askSend.addEventListener('click', askNano);
   els.askStop.addEventListener('click', () => askAbort?.abort());
 
-  // Enter submits; Shift+Enter inserts a newline
   els.askInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askNano(); }
   });
 
-  // Drag the floating panel by its header
   let dragP = null;
   els.askHead.addEventListener('mousedown', (e) => {
     if (e.target === els.askClose) return;
@@ -1288,8 +1210,6 @@ function openAskModal(text, mode = 'ask') {
   els.askInput.value = '';
   els.askModal.style.display = 'flex';
   if (mode === 'translate') {
-    // Translate mode: no typing needed — translation starts immediately.
-    // The input stays available only for optional follow-up questions.
     els.askAnswer.textContent = '翻譯中…';
     els.askInput.placeholder = '想追問這段內容？輸入問題後按 Enter（直接翻譯無需輸入）';
     els.askInput.blur();
@@ -1301,13 +1221,10 @@ function openAskModal(text, mode = 'ask') {
 }
 
 function closeAskModal() {
-  askAbort?.abort();              // stop any in-flight answer
+  askAbort?.abort();
   els.askModal.style.display = 'none';
 }
 
-// Translate the selected snippet and show the result in the ask panel's
-// answer area. Reuses the full-document translator when it's already
-// initialised; otherwise initialises one on demand.
 let quickTransGen = 0;
 async function quickTranslateSelection(text) {
   const gen = ++quickTransGen;
@@ -1317,7 +1234,7 @@ async function quickTranslateSelection(text) {
       translatorObj = await initTranslator(detectedSource, els.targetLang.value, { isManual: true });
     }
     const translated = await doTranslate(translatorObj, text);
-    if (gen !== quickTransGen) return;                       // superseded / closed
+    if (gen !== quickTransGen) return;
     if (els.askModal.style.display === 'none') return;
     els.askAnswer.textContent = translated;
   } catch (e) {
@@ -1330,7 +1247,6 @@ function askSwap(running) {
   els.askStop.style.display = running ? '' : 'none';
 }
 
-// Locate the paragraph a selection came from, by matching its opening words
 function findParagraphByText(snippet) {
   const norm = s => s.replace(/\s+/g, ' ').trim().toLowerCase();
   const key = norm(snippet).slice(0, 40);
@@ -1344,7 +1260,7 @@ function findParagraphByText(snippet) {
 const clamp = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
 
 async function askNano() {
-  if (askAbort) return; // already answering
+  if (askAbort) return;
   if (!('LanguageModel' in self)) { els.askAnswer.textContent = 'Gemini Nano 不可用，無法提問。'; return; }
   const question = els.askInput.value.trim() || '請用繁體中文解釋這段文字的意思與相關背景。';
   const snippet = els.askSel.textContent;
@@ -1356,11 +1272,10 @@ async function askNano() {
 
   try {
     askSession = await LanguageModel.create({
+      samplingMode: 'most-predictable',
       initialPrompts: [{ role: 'system', content: '你是研究助理。使用者會閱讀一篇論文並反白其中一段文字提問。請優先依據提供的「論文摘要」與「前後文」作答，用繁體中文回答；若需補充常識可適度補充並註明。' }],
     });
 
-    // Build layered context within Nano's small context window:
-    // global (AI summary) + local (neighbouring paragraphs) + the selection.
     const parts = [];
     if (summaryObj) {
       parts.push(
