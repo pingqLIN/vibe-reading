@@ -178,6 +178,7 @@
     const availability = await LanguageModel.availability();
     if (availability === 'unavailable') throw new Error('Gemini Nano / Prompt API 不可用。');
     engine.session = await LanguageModel.create({
+      samplingMode: 'most-predictable',
       initialPrompts: [{ role: 'system', content: VT.translationSystemPrompt(engine.targetLang) }],
     });
     return engine.session;
