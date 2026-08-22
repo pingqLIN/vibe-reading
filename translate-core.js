@@ -446,6 +446,7 @@
     trans.onStatus('載入 Gemini Nano…');
     trans.onIndeterminate(true);
     trans.session = await LanguageModel.create({
+      samplingMode: 'most-predictable',
       initialPrompts: [{ role: 'system', content: translationSystemPrompt(trans.targetLang) }],
       monitor(m) {
         m.addEventListener('downloadprogress', (e) => {
