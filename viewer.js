@@ -1,1 +1,1234 @@
-__REPLACE__
+'use strict';
+
+const PDFJS = window.pdfjsLib;
+PDFJS.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('lib/pdf.worker.min.js');
+
+// ─── Shared translation engine (translate-core.js) ──────────────────────────────
+// TARGET_LANGS / langName / browserDefaultTarget / detectSourceLang /
+// initTranslator / doTranslate now live in window.VibeTranslate so the in-page
+// content script can reuse the exact same engine. The PDF viewer behaviour is
+// unchanged — it just sources these from the shared module.
+const {
+  TARGET_LANGS,
+  langName,
+  browserDefaultTarget,
+  detectSourceLang,
+  initTranslator,
+  doTranslate,
+} = window.VibeTranslate;
+
+// ─── DOM refs ─────────────────────────────────────────────────────────────────
+const els = {
+  appVer:        document.getElementById('appVer'),
+  pdfSource:     document.getElementById('pdfSource'),
+  srcLangInfo:   document.getElementById('srcLangInfo'),
+  zoomIn:        document.getElementById('zoomIn'),
+  zoomOut:       document.getElementById('zoomOut'),
+  zoomFit:       document.getElementById('zoomFit'),
+  zoomLabel:     document.getElementById('zoomLabel'),
+  targetLang:    document.getElementById('targetLang'),
+  settingsBtn:   document.getElementById('settingsBtn'),
+  aiBadge:       document.getElementById('aiBadge'),
+  translateBtn:  document.getElementById('translateBtn'),
+  stopBtn:       document.getElementById('stopBtn'),
+  fontDec:       document.getElementById('fontDec'),
+  fontInc:       document.getElementById('fontInc'),
+  statusText:    document.getElementById('statusText'),
+  progressWrap:  document.getElementById('progressWrap'),
+  progressBar:   document.getElementById('progressBar'),
+  progressLabel: document.getElementById('progressLabel'),
+  errorBox:      document.getElementById('errorBox'),
+  pdfPane:       document.getElementById('pdfPane'),
+  pdfInner:      document.getElementById('pdfInner'),
+  divider:       document.getElementById('divider'),
+  summary:       document.getElementById('summary'),
+  results:       document.getElementById('results'),
+  askFloat:      document.getElementById('askFloat'),
+  askFloatAsk:   document.getElementById('askFloatAsk'),
+  askFloatTrans: document.getElementById('askFloatTrans'),
+  askModal:      document.getElementById('askModal'),
+  askSel:        document.getElementById('askSel'),
+  askInput:      document.getElementById('askInput'),
+  askSend:       document.getElementById('askSend'),
+  askStop:       document.getElementById('askStop'),
+  askAnswer:     document.getElementById('askAnswer'),
+  askClose:      document.getElementById('askClose'),
+  askHead:       document.getElementById('askHead'),
+  welcomeModal:      document.getElementById('welcomeModal'),
+  welcomeTargetLang: document.getElementById('welcomeTargetLang'),
+  welcomeClose:      document.getElementById('welcomeClose'),
+  welcomeOpenExt:    document.getElementById('welcomeOpenExt'),
+  welcomeRecheck:    document.getElementById('welcomeRecheck'),
+  welcomeOpenShortcuts: document.getElementById('welcomeOpenShortcuts'),
+  welcomeDone:       document.getElementById('welcomeDone'),
+  welcomeKicker:     document.getElementById('welcomeKicker'),
+  welcomeTitle:      document.getElementById('welcomeTitle'),
+  welcomeLangLabel:  document.getElementById('welcomeLangLabel'),
+  welcomeLangCopy:   document.getElementById('welcomeLangCopy'),
+  welcomeFileLabel:  document.getElementById('welcomeFileLabel'),
+  welcomeFileCopy:   document.getElementById('welcomeFileCopy'),
+  welcomeShortcutLabel: document.getElementById('welcomeShortcutLabel'),
+  welcomeShortcutCopy:  document.getElementById('welcomeShortcutCopy'),
+  fileAccessStatus:  document.getElementById('fileAccessStatus'),
+  shortcutStatus:    document.getElementById('shortcutStatus'),
+};
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let pdfUrl        = null;
+let pdfDoc        = null;
+let abortCtrl     = null;
+let translatorObj = null;
+let paragraphs    = [];
+const pageWraps   = {};
+let renderScale   = 1;
+let detectedSource = 'en';
+let selectedText  = '';
+let summaryDone   = false;
+let summaryObj    = null;
+let segEls        = [];
+let welcomeText   = null;
+
+const WELCOME_TEXT = {
+  'zh-TW': {
+    lang: 'zh-TW',
+    kicker: '初次設定',
+    title: '歡迎使用氛圍閱讀',
+    closeTitle: '關閉',
+    settingsTitle: '設定',
+    targetLabel: '預設目標語言',
+    targetCopy: '之後每次開啟 PDF 都會優先翻譯成這個語言，也可以在右上角隨時改。',
+    fileLabel: '讀取本機 PDF',
+    fileCopy: '若要翻譯電腦裡的 PDF，請到擴充功能管理頁，把「允許存取檔案網址」設成 enable。',
+    shortcutLabel: '快捷鍵',
+    shortcutCopy: '若 Alt+T 沒反應，通常是 Chrome 沒有把快捷鍵指派給這個擴充功能；同時安裝開發版與商城版時尤其容易發生。',
+    checkingFileAccess: '正在檢查檔案網址存取權限...',
+    checkingShortcut: '正在檢查快捷鍵...',
+    openExtensions: '開啟管理擴充功能',
+    openShortcuts: '開啟快捷鍵設定',
+    recheck: '重新檢查',
+    done: '儲存並開始使用',
+    openedExtensions: '管理頁已開啟；把「允許存取檔案網址」設成 enable 後，回來按「重新檢查」。',
+    openedShortcuts: '快捷鍵設定頁已開啟；請確認「用氛圍閱讀翻譯目前分頁的 PDF」有設定為 Alt+T，或改成你想要的按鍵。',
+    cannotCheckFileAccess: 'Chrome 無法回報目前狀態；請到管理擴充功能確認「允許存取檔案網址」已設成 enable。',
+    fileAccessAllowed: '已允許存取檔案網址，可以讀取本機 PDF。',
+    fileAccessDenied: '尚未允許存取檔案網址；本機 PDF 需要開啟這個權限。',
+    shortcutAssigned: shortcut => `目前快捷鍵：${shortcut}`,
+    shortcutMissing: '目前沒有指派快捷鍵。請到 Chrome 快捷鍵設定頁手動指定 Alt+T，或先停用另一個占用 Alt+T 的擴充功能。',
+    shortcutUnknown: 'Chrome 無法回報快捷鍵狀態；請到快捷鍵設定頁確認。',
+    noPdfWelcomeStatus: '初次設定完成後，請開啟一個 PDF 分頁並點擊插件圖示或右鍵選單。',
+  },
+  en: {
+    lang: 'en',
+    kicker: 'First-run setup',
+    title: 'Welcome to Vibe Reading',
+    closeTitle: 'Close',
+    settingsTitle: 'Settings',
+    targetLabel: 'Default target language',
+    targetCopy: 'PDFs will be translated into this language by default. You can change it anytime from the top-right menu.',
+    fileLabel: 'Read local PDFs',
+    fileCopy: 'To translate PDFs from your computer, open the extension details page and enable "Allow access to file URLs".',
+    shortcutLabel: 'Keyboard shortcut',
+    shortcutCopy: 'If Alt+T does not respond, Chrome probably did not assign the shortcut to this extension. This is common when both the unpacked build and Web Store build are installed.',
+    checkingFileAccess: 'Checking file URL access...',
+    checkingShortcut: 'Checking shortcut...',
+    openExtensions: 'Open extension settings',
+    openShortcuts: 'Open shortcut settings',
+    recheck: 'Recheck',
+    done: 'Save and start',
+    openedExtensions: 'The extension settings page is open. Enable "Allow access to file URLs", then come back and click "Recheck".',
+    openedShortcuts: 'The shortcut settings page is open. Confirm that "用氛圍閱讀翻譯目前分頁的 PDF" is set to Alt+T, or choose another shortcut.',
+    cannotCheckFileAccess: 'Chrome cannot report the current state. Please confirm that "Allow access to file URLs" is enabled in extension settings.',
+    fileAccessAllowed: 'File URL access is enabled. Local PDFs can be opened.',
+    fileAccessDenied: 'File URL access is not enabled yet. Local PDFs need this permission.',
+    shortcutAssigned: shortcut => `Current shortcut: ${shortcut}`,
+    shortcutMissing: 'No shortcut is currently assigned. Open Chrome shortcut settings to assign Alt+T, or disable another extension that already uses Alt+T.',
+    shortcutUnknown: 'Chrome cannot report the shortcut state. Please confirm it in shortcut settings.',
+    noPdfWelcomeStatus: 'After setup, open a PDF tab, then click the extension icon or context menu.',
+  },
+};
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  try { els.appVer.textContent = 'v' + chrome.runtime.getManifest().version; } catch (_) {}
+  await populateTargetSelect();
+  setupFontControl();
+  setupDivider();
+  setupSelectionAsk();
+  setupReverseLocate();
+  setupZoom();
+  setupKeyboardScroll();
+
+  els.translateBtn.addEventListener('click', () => startTranslation(true));
+  els.stopBtn.addEventListener('click', () => {
+    abortCtrl?.abort();
+    setStatus('已停止');
+    swapButtons(false);
+  });
+  els.targetLang.addEventListener('change', async () => {
+    chrome.storage.local.set({ targetLang: els.targetLang.value });
+    await checkAI();
+  });
+
+  const params = new URLSearchParams(location.search);
+  pdfUrl = params.get('file');
+  const isWelcome = params.get('welcome') === '1';
+  await setupFirstRunPrompt(isWelcome);
+  await checkAI();
+
+  if (!pdfUrl) {
+    setStatus(isWelcome ? welcomeText.noPdfWelcomeStatus : '未指定 PDF。請開啟一個 PDF 分頁後點擊插件圖示或右鍵選單。');
+    return;
+  }
+
+  showPdfSource();
+
+  try {
+    await loadAndRenderPdf();
+    detectedSource = await detectSourceLang(paragraphs.slice(0, 5).map(p => p.text).join(' ').slice(0, 1000));
+    els.srcLangInfo.textContent = `偵測來源：${detectedSource}`;
+    els.translateBtn.disabled = false;
+    setStatus('PDF 已載入');
+    if (!els.translateBtn.disabled) startTranslation(false);
+  } catch (e) {
+    showError('載入 PDF 失敗：' + e.message);
+    setStatus('載入失敗');
+  }
+});
+
+function populateTargetSelect() {
+  fillLangSelect(els.targetLang);
+  els.targetLang.value = browserDefaultTarget();
+  return storageGet('targetLang').then(({ targetLang }) => {
+    els.targetLang.value = targetLang || browserDefaultTarget();
+  });
+}
+
+function fillLangSelect(selectEl) {
+  selectEl.innerHTML = TARGET_LANGS.map(t => `<option value="${t.code}">${t.name}</option>`).join('');
+}
+
+function storageGet(keys) {
+  return new Promise(resolve => chrome.storage.local.get(keys, resolve));
+}
+
+async function setupFirstRunPrompt(showWelcome) {
+  welcomeText = getWelcomeText();
+  applyWelcomeText(welcomeText);
+  fillLangSelect(els.welcomeTargetLang);
+  const { targetLang } = await storageGet('targetLang');
+  els.welcomeTargetLang.value = targetLang || browserDefaultTarget();
+
+  els.welcomeTargetLang.addEventListener('change', () => {
+    els.targetLang.value = els.welcomeTargetLang.value;
+    chrome.storage.local.set({ targetLang: els.welcomeTargetLang.value });
+    checkAI();
+  });
+  els.welcomeDone.addEventListener('click', saveWelcomeSettings);
+  els.welcomeClose.addEventListener('click', saveWelcomeSettings);
+  els.settingsBtn.addEventListener('click', openWelcomeSettings);
+  els.welcomeRecheck.addEventListener('click', refreshFileAccessStatus);
+  els.welcomeOpenShortcuts.addEventListener('click', () => {
+    chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    els.shortcutStatus.textContent = welcomeText.openedShortcuts;
+    els.shortcutStatus.className = 'file-access-status warn';
+  });
+  els.welcomeOpenExt.addEventListener('click', () => {
+    chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` });
+    els.fileAccessStatus.textContent = welcomeText.openedExtensions;
+    els.fileAccessStatus.className = 'file-access-status warn';
+  });
+
+  if (showWelcome) {
+    els.targetLang.value = els.welcomeTargetLang.value;
+    els.welcomeModal.style.display = 'flex';
+    refreshFileAccessStatus();
+    refreshShortcutStatus();
+  }
+}
+
+function openWelcomeSettings() {
+  els.welcomeTargetLang.value = els.targetLang.value || browserDefaultTarget();
+  els.welcomeModal.style.display = 'flex';
+  refreshFileAccessStatus();
+  refreshShortcutStatus();
+}
+
+function saveWelcomeSettings() {
+  const targetLang = els.welcomeTargetLang.value || browserDefaultTarget();
+  els.targetLang.value = targetLang;
+  chrome.storage.local.set({ targetLang, firstRunSetupDone: true });
+  els.welcomeModal.style.display = 'none';
+  checkAI();
+}
+
+function refreshFileAccessStatus() {
+  if (!chrome.extension?.isAllowedFileSchemeAccess) {
+    els.fileAccessStatus.textContent = welcomeText.cannotCheckFileAccess;
+    els.fileAccessStatus.className = 'file-access-status warn';
+    return;
+  }
+  chrome.extension.isAllowedFileSchemeAccess((allowed) => {
+    els.fileAccessStatus.textContent = allowed ? welcomeText.fileAccessAllowed : welcomeText.fileAccessDenied;
+    els.fileAccessStatus.className = `file-access-status ${allowed ? 'ok' : 'warn'}`;
+  });
+}
+
+function refreshShortcutStatus() {
+  if (!chrome.commands?.getAll) {
+    els.shortcutStatus.textContent = welcomeText.shortcutUnknown;
+    els.shortcutStatus.className = 'file-access-status warn';
+    return;
+  }
+  chrome.commands.getAll((commands) => {
+    const command = commands.find(c => c.name === 'translate-pdf');
+    const shortcut = command?.shortcut || '';
+    els.shortcutStatus.textContent = shortcut ? welcomeText.shortcutAssigned(shortcut) : welcomeText.shortcutMissing;
+    els.shortcutStatus.className = `file-access-status ${shortcut ? 'ok' : 'warn'}`;
+  });
+}
+
+function getWelcomeText() {
+  const langs = (navigator.languages?.length ? navigator.languages : [navigator.language || 'en']).map(l => String(l).toLowerCase());
+  return langs.some(l => l.startsWith('zh')) ? WELCOME_TEXT['zh-TW'] : WELCOME_TEXT.en;
+}
+
+function applyWelcomeText(text) {
+  els.welcomeModal.lang = text.lang;
+  els.welcomeKicker.textContent = text.kicker;
+  els.welcomeTitle.textContent = text.title;
+  els.welcomeClose.title = text.closeTitle;
+  els.settingsBtn.title = text.settingsTitle;
+  els.welcomeLangLabel.textContent = text.targetLabel;
+  els.welcomeLangCopy.textContent = text.targetCopy;
+  els.welcomeFileLabel.textContent = text.fileLabel;
+  els.welcomeFileCopy.textContent = text.fileCopy;
+  els.welcomeShortcutLabel.textContent = text.shortcutLabel;
+  els.welcomeShortcutCopy.textContent = text.shortcutCopy;
+  els.fileAccessStatus.textContent = text.checkingFileAccess;
+  els.shortcutStatus.textContent = text.checkingShortcut;
+  els.welcomeOpenExt.textContent = text.openExtensions;
+  els.welcomeOpenShortcuts.textContent = text.openShortcuts;
+  els.welcomeRecheck.textContent = text.recheck;
+  els.welcomeDone.textContent = text.done;
+}
+
+const FONT_MIN = 10, FONT_MAX = 26, FONT_DEFAULT = 13;
+let transFont = FONT_DEFAULT;
+
+function applyTransFont(px) {
+  transFont = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+  document.documentElement.style.setProperty('--trans-font', transFont + 'px');
+  chrome.storage.local.set({ transFont });
+}
+
+function setupFontControl() {
+  chrome.storage.local.get('transFont', ({ transFont: saved }) => {
+    applyTransFont(saved || FONT_DEFAULT);
+  });
+  applyTransFont(transFont);
+  els.fontDec.addEventListener('click', () => applyTransFont(transFont - 1));
+  els.fontInc.addEventListener('click', () => applyTransFont(transFont + 1));
+}
+
+async function checkAI() {
+  const badge = els.aiBadge;
+  badge.textContent = '偵測中...';
+  badge.className = 'badge';
+  const target = els.targetLang.value;
+
+  if ('Translator' in self) {
+    try {
+      const a = await Translator.availability({ sourceLanguage: 'en', targetLanguage: target });
+      if (a !== 'unavailable') { badge.textContent = 'Translator API ✓'; badge.className = 'badge badge-ok'; return; }
+    } catch (_) {}
+  }
+  if ('LanguageModel' in self) {
+    try {
+      const a = await LanguageModel.availability();
+      if (a !== 'unavailable') { badge.textContent = 'Gemini Nano ✓'; badge.className = 'badge badge-ok'; return; }
+    } catch (_) {}
+  }
+
+  badge.textContent = 'AI 不可用';
+  badge.className = 'badge badge-err';
+  els.translateBtn.disabled = true;
+  showError('Chrome 內建 AI 無法使用。請確認：\n1. Chrome 版本 ≥ 138\n2. chrome://flags 啟用「Prompt API」與「Translator API」\n3. chrome://components 更新「Optimization Guide On Device Model」\n4. 重新啟動 Chrome');
+}
+
+function isDownloadGestureError(err) {
+  return err?.name === 'ModelDownloadNeedsUserGesture' || /Requires a user gesture/i.test(err?.message || '');
+}
+
+function showPdfSource() {
+  const isFile = /^file:/i.test(pdfUrl);
+  const fname  = decodeURIComponent(pdfUrl.split('/').pop().split('?')[0]) || pdfUrl;
+  els.pdfSource.textContent = isFile ? `📁 本機檔案：${fname}` : `🌐 ${pdfUrl}`;
+  els.pdfSource.title = pdfUrl;
+  els.pdfSource.onclick = () => window.open(pdfUrl, '_blank');
+  document.title = `[氛圍閱讀] ${fname}`;
+}
+
+let baseScale = 1;
+let zoom      = 1;
+
+async function loadAndRenderPdf() {
+  setStatus('下載 PDF 檔案...');
+  setIndeterminate(true);
+  els.progressWrap.style.display = 'flex';
+
+  const resp = await fetch(pdfUrl);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}（若為本機檔案，請到 chrome://extensions 開啟「允許存取檔案網址」）`);
+  const buf = await resp.arrayBuffer();
+  setIndeterminate(false);
+
+  pdfDoc = await PDFJS.getDocument({ data: buf }).promise;
+
+  try {
+    const meta = await pdfDoc.getMetadata();
+    const docTitle = meta?.info?.Title?.trim();
+    if (docTitle) document.title = `[氛圍閱讀] ${docTitle}`;
+  } catch (_) {}
+
+  const firstPage = await pdfDoc.getPage(1);
+  const base = firstPage.getViewport({ scale: 1 });
+  const paneW = els.pdfPane.clientWidth - 48;
+  baseScale = Math.max(0.5, Math.min(2.5, paneW / base.width));
+  zoom = 1;
+  renderScale = baseScale * zoom;
+
+  paragraphs = [];
+  await renderPages(true);
+  updateZoomLabel();
+}
+
+async function renderPages(computeParagraphs) {
+  const dpr = window.devicePixelRatio || 1;
+  const total = pdfDoc.numPages;
+  els.pdfInner.innerHTML = '';
+  for (const k in pageWraps) delete pageWraps[k];
+
+  for (let p = 1; p <= total; p++) {
+    setStatus(`渲染第 ${p} / ${total} 頁`);
+    setProgress(p / total, `${p}/${total} 頁`);
+
+    const page     = await pdfDoc.getPage(p);
+    const viewport = page.getViewport({ scale: renderScale });
+    const renderVp = page.getViewport({ scale: renderScale * dpr });
+
+    const wrap = document.createElement('div');
+    wrap.className = 'page-wrap';
+    wrap.dataset.page = p;
+    wrap.style.width  = viewport.width + 'px';
+    wrap.style.height = viewport.height + 'px';
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = renderVp.width;
+    canvas.height = renderVp.height;
+    canvas.style.width  = viewport.width + 'px';
+    canvas.style.height = viewport.height + 'px';
+    wrap.appendChild(canvas);
+    els.pdfInner.appendChild(wrap);
+
+    const content = await page.getTextContent();
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: renderVp }).promise;
+
+    const textLayer = document.createElement('div');
+    textLayer.className = 'textLayer';
+    textLayer.style.width  = viewport.width + 'px';
+    textLayer.style.height = viewport.height + 'px';
+    textLayer.style.setProperty('--scale-factor', renderScale);
+    wrap.appendChild(textLayer);
+    try {
+      await PDFJS.renderTextLayer({ textContentSource: content, container: textLayer, viewport, textDivs: [] }).promise;
+    } catch (e) {
+      console.warn('[PDF翻譯] 文字層渲染失敗（不影響翻譯）：', e);
+    }
+
+    pageWraps[p] = {
+      wrap, canvas, textLayer, viewport,
+      w1: viewport.width / renderScale,
+      h1: viewport.height / renderScale,
+    };
+
+    if (computeParagraphs) {
+      for (const para of extractParagraphs(content.items)) paragraphs.push({ page: p, text: para.text, rect: para.rect });
+    }
+  }
+}
+
+let rerenderT = null;
+function updateZoomLabel() { if (els.zoomLabel) els.zoomLabel.textContent = Math.round(zoom * 100) + '%'; }
+
+function setZoom(z, focalClientY) {
+  if (!pdfDoc) return;
+  const fcY = focalClientY != null ? focalClientY : els.pdfPane.getBoundingClientRect().top + els.pdfPane.clientHeight / 2;
+  let anchorPage = null, anchorFy = 0.5;
+  for (const k in pageWraps) {
+    const r = pageWraps[k].wrap.getBoundingClientRect();
+    if (fcY >= r.top && fcY <= r.bottom) { anchorPage = Number(k); anchorFy = (fcY - r.top) / r.height; break; }
+  }
+  if (anchorPage == null) {
+    let bd = Infinity;
+    for (const k in pageWraps) {
+      const r = pageWraps[k].wrap.getBoundingClientRect();
+      const d = Math.abs((r.top + r.bottom) / 2 - fcY);
+      if (d < bd) { bd = d; anchorPage = Number(k); anchorFy = 0.5; }
+    }
+  }
+
+  zoom = Math.max(0.4, Math.min(4, z));
+  renderScale = baseScale * zoom;
+  updateZoomLabel();
+  applyDisplayScale(renderScale);
+  anchorScroll(anchorPage, anchorFy, fcY);
+  clearTimeout(rerenderT);
+  rerenderT = setTimeout(() => sharpenPages(), 200);
+}
+
+let sharpenGen = 0;
+async function sharpenPages() {
+  if (!pdfDoc) return;
+  const gen = ++sharpenGen;
+  const dpr = window.devicePixelRatio || 1;
+  const paneRect = els.pdfPane.getBoundingClientRect();
+  const vis = [], rest = [];
+  for (let p = 1; p <= pdfDoc.numPages; p++) {
+    const pg = pageWraps[p]; if (!pg) continue;
+    const r = pg.wrap.getBoundingClientRect();
+    (r.bottom > paneRect.top && r.top < paneRect.bottom ? vis : rest).push(p);
+  }
+
+  for (const p of vis.concat(rest)) {
+    if (gen !== sharpenGen) return;
+    const pg = pageWraps[p]; if (!pg) continue;
+    const page = await pdfDoc.getPage(p);
+    if (gen !== sharpenGen) return;
+    const sc = renderScale;
+    const renderVp = page.getViewport({ scale: sc * dpr });
+    pg.canvas.width = renderVp.width;
+    pg.canvas.height = renderVp.height;
+    pg.canvas.style.width = (pg.w1 * sc) + 'px';
+    pg.canvas.style.height = (pg.h1 * sc) + 'px';
+    await page.render({ canvasContext: pg.canvas.getContext('2d'), viewport: renderVp }).promise;
+    pg.viewport = page.getViewport({ scale: sc });
+  }
+}
+
+function applyDisplayScale(scale) {
+  for (const k in pageWraps) {
+    const pg = pageWraps[k];
+    const w = pg.w1 * scale, h = pg.h1 * scale;
+    pg.wrap.style.width = w + 'px';
+    pg.wrap.style.height = h + 'px';
+    if (pg.canvas) { pg.canvas.style.width = w + 'px'; pg.canvas.style.height = h + 'px'; }
+    if (pg.textLayer) {
+      pg.textLayer.style.width = w + 'px';
+      pg.textLayer.style.height = h + 'px';
+      pg.textLayer.style.setProperty('--scale-factor', scale);
+    }
+  }
+}
+
+function anchorScroll(page, fy, fcY) {
+  const pg = pageWraps[page];
+  if (!pg) return;
+  const r = pg.wrap.getBoundingClientRect();
+  els.pdfPane.scrollTop += (r.top + fy * r.height) - fcY;
+}
+
+function setupZoom() {
+  els.zoomIn.addEventListener('click', () => setZoom(zoom * 1.2));
+  els.zoomOut.addEventListener('click', () => setZoom(zoom / 1.2));
+  els.zoomFit.addEventListener('click', () => setZoom(1));
+  els.pdfPane.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    setZoom(zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientY);
+  }, { passive: false });
+}
+
+function setupKeyboardScroll() {
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (els.askModal.style.display !== 'none') return;
+    const pane = els.pdfPane;
+    const line = 90, page = pane.clientHeight * 0.9;
+    switch (e.key) {
+      case 'ArrowDown': pane.scrollTop += line; break;
+      case 'ArrowUp': pane.scrollTop -= line; break;
+      case 'ArrowRight': gotoPage(1); break;
+      case 'ArrowLeft': gotoPage(-1); break;
+      case 'PageDown': pane.scrollTop += page; break;
+      case 'PageUp': pane.scrollTop -= page; break;
+      case 'Home': pane.scrollTop = 0; break;
+      case 'End': pane.scrollTop = pane.scrollHeight; break;
+      default: return;
+    }
+    e.preventDefault();
+  });
+}
+
+function gotoPage(delta) {
+  if (!pdfDoc) return;
+  const paneTop = els.pdfPane.getBoundingClientRect().top;
+  let curr = 1;
+  for (let p = 1; p <= pdfDoc.numPages; p++) {
+    const pg = pageWraps[p];
+    if (pg && pg.wrap.getBoundingClientRect().bottom > paneTop + 4) { curr = p; break; }
+  }
+  const target = Math.max(1, Math.min(pdfDoc.numPages, curr + delta));
+  const tr = pageWraps[target]?.wrap.getBoundingClientRect();
+  if (tr) els.pdfPane.scrollBy({ top: (tr.top - paneTop) - 8, behavior: 'smooth' });
+}
+
+function extractParagraphs(items) {
+  const its = items.filter(it => it.str.trim() && Math.abs(it.transform[1]) < 2 && Math.abs(it.transform[2]) < 2);
+  if (!its.length) return [];
+  const lines = buildVisualLines(its);
+  if (!lines.length) return [];
+  const out = [];
+  for (const block of readingBlocksFromLines(lines)) out.push(...paragraphsFromLines(block));
+  return out;
+}
+
+function lineCompare(a, b) { const dy = b.y - a.y; return Math.abs(dy) > 2 ? dy : a.startX - b.startX; }
+function median(nums) { if (!nums.length) return 0; const a = nums.slice().sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; }
+
+function makeLine(items, fallbackY) {
+  const sorted = items.slice().sort((a, b) => a.transform[4] - b.transform[4]);
+  const starts = sorted.map(it => it.transform[4]);
+  const ends = sorted.map(it => it.transform[4] + (it.width || 0));
+  const heights = sorted.map(it => it.height || 10);
+  return {
+    y: median(sorted.map(it => it.transform[5])) || fallbackY,
+    startX: Math.min(...starts),
+    endX: Math.max(...ends),
+    fontH: median(heights) || 10,
+    items: sorted,
+    text: sorted.map(it => it.str).join(' ').replace(/\s+/g, ' ').trim(),
+  };
+}
+
+function buildVisualLines(its) {
+  const fontH = median(its.map(it => it.height || 10)) || 10;
+  const rowTolerance = Math.max(3, fontH * 0.45);
+  const sorted = its.slice().sort((a, b) => {
+    const dy = b.transform[5] - a.transform[5];
+    return Math.abs(dy) > rowTolerance ? dy : a.transform[4] - b.transform[4];
+  });
+  const rows = [];
+  let row = { y: sorted[0].transform[5], items: [sorted[0]] };
+  for (let i = 1; i < sorted.length; i++) {
+    const y = sorted[i].transform[5];
+    if (Math.abs(y - row.y) <= rowTolerance) row.items.push(sorted[i]);
+    else { rows.push(row); row = { y, items: [sorted[i]] }; }
+  }
+  rows.push(row);
+  const minX = Math.min(...its.map(it => it.transform[4]));
+  const maxX = Math.max(...its.map(it => it.transform[4] + (it.width || 0)));
+  const pageW = maxX - minX;
+  const gapThreshold = Math.max(12, fontH * 1.15, pageW * 0.022);
+  const lines = [];
+  for (const r of rows) {
+    const rowItems = r.items.slice().sort((a, b) => a.transform[4] - b.transform[4]);
+    let frag = [rowItems[0]];
+    let lastEnd = rowItems[0].transform[4] + (rowItems[0].width || 0);
+    for (let i = 1; i < rowItems.length; i++) {
+      const it = rowItems[i], x = it.transform[4], end = x + (it.width || 0);
+      if (x - lastEnd > gapThreshold) {
+        const line = makeLine(frag, r.y); if (line.text) lines.push(line); frag = [];
+      }
+      frag.push(it); lastEnd = Math.max(lastEnd, end);
+    }
+    const line = makeLine(frag, r.y); if (line.text) lines.push(line);
+  }
+  return lines.sort(lineCompare);
+}
+
+function detectTwoColumnLines(lines) {
+  if (lines.length < 10) return { twoColumn: false };
+  const minX = Math.min(...lines.map(l => l.startX));
+  const maxX = Math.max(...lines.map(l => l.endX));
+  const pageW = maxX - minX;
+  if (pageW < 50) return { twoColumn: false };
+  const bodyLines = lines.filter(l => l.text.length >= 16 && (l.endX - l.startX) > pageW * 0.18);
+  if (bodyLines.length < 10) return { twoColumn: false };
+  const n = bodyLines.length;
+  let best = null;
+  for (let gx = minX + pageW * 0.35; gx <= minX + pageW * 0.65; gx += 4) {
+    let cross = 0, leftN = 0, rightN = 0;
+    for (const l of bodyLines) {
+      if (l.startX < gx && l.endX > gx) cross++;
+      else if (l.endX <= gx) leftN++;
+      else rightN++;
+    }
+    if (leftN > n * 0.15 && rightN > n * 0.15) {
+      const score = cross + Math.abs(leftN - rightN) * 0.1;
+      if (!best || score < best.score) best = { x: gx, cross, leftN, rightN, score };
+    }
+  }
+  if (!best || best.cross > Math.max(4, n * 0.30)) return { twoColumn: false };
+  const leftLines = bodyLines.filter(l => l.endX <= best.x);
+  const rightLines = bodyLines.filter(l => l.startX >= best.x);
+  const leftCenter = median(leftLines.map(l => (l.startX + l.endX) / 2));
+  const rightCenter = median(rightLines.map(l => (l.startX + l.endX) / 2));
+  if (rightCenter - leftCenter < pageW * 0.25) return { twoColumn: false };
+  return { twoColumn: true, splitX: best.x, pageW };
+}
+
+function classifyLine(line, splitX, tol) {
+  if (line.startX < splitX - tol && line.endX > splitX + tol) return 'full';
+  return (line.startX + line.endX) / 2 < splitX ? 'left' : 'right';
+}
+
+function readingBlocksFromLines(lines) {
+  const layout = detectTwoColumnLines(lines);
+  if (!layout.twoColumn) return [lines.slice().sort(lineCompare)];
+  const tol = Math.max(6, layout.pageW * 0.015);
+  const annotated = lines.map(l => Object.assign({}, l, { column: classifyLine(l, layout.splitX, tol) })).sort(lineCompare);
+  const blocks = [];
+  let zone = [];
+  function flushZone() {
+    if (!zone.length) return;
+    const left = zone.filter(l => l.column === 'left').sort(lineCompare);
+    const right = zone.filter(l => l.column === 'right').sort(lineCompare);
+    if (left.length && right.length) blocks.push(left, right); else blocks.push(zone.slice().sort(lineCompare));
+    zone = [];
+  }
+  for (let i = 0; i < annotated.length; i++) {
+    const line = annotated[i];
+    if (line.column !== 'full') { zone.push(line); continue; }
+    flushZone();
+    const fullRun = [line];
+    while (i + 1 < annotated.length && annotated[i + 1].column === 'full') fullRun.push(annotated[++i]);
+    blocks.push(fullRun.sort(lineCompare));
+  }
+  flushZone();
+  return blocks.filter(b => b.length);
+}
+
+function paragraphsFromLines(lines) {
+  const L = lines.slice().sort(lineCompare).filter(l => l.text);
+  if (!L.length) return [];
+  const startBins = {};
+  for (const l of L) { const k = Math.round(l.startX / 3) * 3; startBins[k] = (startBins[k] || 0) + 1; }
+  const leftMargin = Number(Object.entries(startBins).sort((a, b) => b[1] - a[1])[0][0]);
+  const rightEdge = Math.max(...L.map(l => l.endX));
+  const colWidth = Math.max(1, rightEdge - leftMargin);
+  const indentTol = Math.max(12, colWidth * 0.025);
+  const shortTol = Math.max(16, colWidth * 0.15);
+  const justified = L.filter(l => l.endX > rightEdge - shortTol).length >= L.length * 0.6;
+  const gaps = [];
+  for (let i = 1; i < L.length; i++) gaps.push(Math.abs(L[i - 1].y - L[i].y));
+  const groups = [];
+  let g = [L[0]];
+  for (let i = 1; i < L.length; i++) {
+    const prev = L[i - 1], cur = L[i];
+    const fh = Math.max(prev.fontH, cur.fontH) || 12;
+    const bigGap = Math.abs(prev.y - cur.y) > fh * 1.4;
+    const reachesRight = cur.endX > rightEdge - shortTol;
+    const nxt = L[i + 1];
+    const blockLeft = Math.min(prev.startX, nxt ? nxt.startX : prev.startX);
+    const indented = cur.startX > blockLeft + indentTol && reachesRight;
+    if (bigGap || indented) { groups.push(g); g = []; }
+    g.push(cur);
+  }
+  if (g.length) groups.push(g);
+  return groups.map(grp => {
+    const flat = grp.flatMap(l => l.items);
+    const text = grp.map(l => l.text).join(' ').replace(/\s+/g, ' ').trim();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const it of flat) {
+      const x = it.transform[4], y = it.transform[5], w = it.width || 0, h = it.height || 10;
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+    }
+    return { text, rect: { x0, y0, x1, y1 } };
+  }).filter(p => p.text.length > 20);
+}
+
+async function startTranslation(isManual) {
+  if (abortCtrl) return;
+  clearError();
+  els.results.innerHTML = '';
+  if (!paragraphs.length) { showError('沒有可翻譯的文字（可能是掃描版 PDF）。'); return; }
+  abortCtrl = new AbortController();
+  const { signal } = abortCtrl;
+  swapButtons(true);
+  els.progressWrap.style.display = 'flex';
+  try {
+    setStatus('初始化翻譯引擎...');
+    translatorObj = await initTranslator(detectedSource, els.targetLang.value, {
+      isManual,
+      onStatus: setStatus, onProgress: setProgress, onIndeterminate: setIndeterminate,
+    });
+    const total = paragraphs.length;
+    const shells = paragraphs.map((p, i) => appendSegment(p, i));
+    segEls = shells;
+    const concurrency = translatorObj.type === 'translator' ? 4 : 1;
+    if (!summaryDone && translatorObj.type === 'translator') generateSummary();
+    let done = 0, nextIdx = 0;
+    async function worker() {
+      while (true) {
+        if (signal.aborted) return;
+        const i = nextIdx++;
+        if (i >= total) return;
+        try {
+          const translated = await doTranslate(translatorObj, paragraphs[i].text);
+          fillTranslation(shells[i], translated);
+        } catch (e) {
+          fillTranslation(shells[i], `[翻譯失敗: ${e.message}]`, true);
+        }
+        done++;
+        setProgress(done / total, `${done} / ${total}`);
+        setStatus(`翻譯中 ${done} / ${total} 段`);
+      }
+    }
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (!signal.aborted) {
+      setProgress(1, '完成');
+      setStatus(`完成！共翻譯 ${total} 段（點任一段可定位原文）`);
+      if (!summaryDone) generateSummary();
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      if (!isManual && isDownloadGestureError(e)) {
+        clearError();
+        els.progressWrap.style.display = 'none';
+        setStatus('PDF 已載入；首次使用需點擊「翻譯」開始下載 Chrome 內建 AI 模型。');
+      } else {
+        showError(e.message);
+        setStatus('發生錯誤');
+      }
+    }
+  } finally {
+    swapButtons(false);
+    abortCtrl = null;
+  }
+}
+
+function validateSummaryObject(obj) {
+  const keys = ['background', 'relatedWork', 'highlights', 'conclusion'];
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj) ||
+      keys.some(key => typeof obj[key] !== 'string' || !obj[key].trim())) {
+    throw new Error('Gemini Nano returned an incomplete summary payload.');
+  }
+  return obj;
+}
+
+async function generateSummary() {
+  if (summaryDone) return;
+  if (!('LanguageModel' in self)) return;
+  try {
+    const avail = await LanguageModel.availability();
+    if (avail !== 'available') return;
+  } catch { return; }
+
+  summaryDone = true;
+  renderSummaryShell();
+
+  let session;
+  try {
+    session = await LanguageModel.create({
+      samplingMode: 'most-predictable',
+      initialPrompts: [{ role: 'system', content: '你是學術論文分析助理，使用繁體中文、精煉地回答。' }],
+    });
+
+    const fullText = paragraphs.map(p => p.text).join('\n');
+    const text = fullText.slice(0, 7000);
+
+    const schema = {
+      type: 'object',
+      properties: {
+        background:  { type: 'string' },
+        relatedWork: { type: 'string' },
+        highlights:  { type: 'string' },
+        conclusion:  { type: 'string' },
+      },
+      required: ['background', 'relatedWork', 'highlights', 'conclusion'],
+    };
+
+    const prompt =
+      '以下是一篇論文的內文。請閱讀後，用繁體中文輸出四個面向的重點，每項約 2–4 句：\n' +
+      '• background：研究背景與所需背景知識\n' +
+      '• relatedWork：相關研究（Related Work）\n' +
+      '• highlights：此研究的突破與亮點\n' +
+      '• conclusion：總結\n\n論文內文：\n' + text;
+
+    let obj;
+    try {
+      const raw = await session.prompt(prompt, { responseConstraint: schema });
+      obj = validateSummaryObject(JSON.parse(raw));
+    } catch (constraintError) {
+      console.info('[PDF翻譯] constrained summary unavailable; falling back to plain JSON output:', constraintError);
+      const raw = await session.prompt(prompt + '\n\n請只輸出 JSON 物件，不要加入其他文字。鍵必須完整包含 background, relatedWork, highlights, conclusion，且四個值都必須是非空字串。');
+      obj = validateSummaryObject(JSON.parse(raw.replace(/^[^{]*/, '').replace(/[^}]*$/, '')));
+    }
+
+    summaryObj = obj;
+    renderSummary(obj);
+  } catch (e) {
+    console.warn('[PDF翻譯] 摘要產生失敗：', e);
+    summaryDone = false;
+    if (isDownloadGestureError(e)) {
+      els.summary.style.display = 'none';
+      return;
+    }
+    els.summary.innerHTML = `<div class="sum-head">🧠 AI 摘要</div><div class="sum-err">摘要產生失敗：${esc(e.message)}</div>`;
+  } finally {
+    try { session?.destroy(); } catch (_) {}
+  }
+}
+
+function renderSummaryShell() {
+  els.summary.style.display = '';
+  els.summary.innerHTML = `
+    <div class="sum-head">🧠 AI 摘要 <span class="sum-by">由 Gemini Nano 生成</span></div>
+    <div class="sum-loading">分析整份論文中…（地端模型，請稍候）</div>`;
+}
+
+function renderSummary(obj) {
+  const sec = (icon, title, body) => `
+    <div class="sum-sec">
+      <div class="sum-title">${icon} ${title}</div>
+      <div class="sum-body">${esc(body || '—')}</div>
+    </div>`;
+  els.summary.style.display = '';
+  els.summary.innerHTML =
+    `<div class="sum-head">🧠 AI 摘要 <span class="sum-by">由 Gemini Nano 生成</span></div>` +
+    sec('📘', '背景知識 Background', obj.background) +
+    sec('🔗', '相關研究 Related Work', obj.relatedWork) +
+    sec('✨', '突破亮點 Highlights', obj.highlights) +
+    sec('📝', '總結 Conclusion', obj.conclusion);
+}
+
+function appendSegment(para, idx) {
+  const div = document.createElement('div');
+  div.className = 'segment';
+  div.dataset.idx = idx;
+  div.innerHTML = `
+    <div class="seg-meta">
+      <span class="seg-page">第 ${para.page} 頁</span>
+      <span class="seg-num">#${idx + 1}</span>
+    </div>
+    <div class="seg-orig">${esc(para.text)}</div>
+    <div class="seg-trans loading">翻譯中…</div>`;
+  div.addEventListener('click', (e) => {
+    if (e.target.closest('.seg-edit')) return;
+    locate(idx, div);
+  });
+  div.addEventListener('dblclick', (e) => {
+    const t = e.target.closest('.seg-trans');
+    if (t && !t.classList.contains('loading')) enterEditMode(t);
+  });
+  els.results.appendChild(div);
+  return div;
+}
+
+function enterEditMode(transEl) {
+  if (transEl.querySelector('.seg-edit')) return;
+  const original = transEl.textContent;
+  const ta = document.createElement('textarea');
+  ta.className = 'seg-edit';
+  ta.value = original;
+  transEl.textContent = '';
+  transEl.appendChild(ta);
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(400, ta.scrollHeight + 4) + 'px';
+  ta.focus();
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(400, ta.scrollHeight + 4) + 'px';
+  });
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const text = save ? ta.value : original;
+    ta.remove();
+    transEl.textContent = text;
+  };
+  ta.addEventListener('blur', () => finish(true));
+  ta.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ta.blur(); }
+    else if (e.key === 'Escape') finish(false);
+  });
+  ['click', 'mouseup', 'mousedown', 'dblclick'].forEach(ev => ta.addEventListener(ev, (e) => e.stopPropagation()));
+}
+
+function fillTranslation(el, text, isError = false) {
+  const t = el.querySelector('.seg-trans');
+  t.textContent = text;
+  t.classList.remove('loading');
+  if (isError) t.classList.add('err');
+}
+
+function locate(idx, segEl) {
+  const para = paragraphs[idx];
+  const pg = pageWraps[para.page];
+  if (!pg) return;
+  document.querySelectorAll('.seg-active').forEach(e => e.classList.remove('seg-active'));
+  segEl.classList.add('seg-active');
+  document.querySelectorAll('.hl').forEach(e => e.remove());
+  const [ax, ay] = pg.viewport.convertToViewportPoint(para.rect.x0, para.rect.y0);
+  const [bx, by] = pg.viewport.convertToViewportPoint(para.rect.x1, para.rect.y1);
+  const pad = 4;
+  const hl = document.createElement('div');
+  hl.className = 'hl';
+  hl.style.left = (Math.min(ax, bx) - pad) + 'px';
+  hl.style.top = (Math.min(ay, by) - pad) + 'px';
+  hl.style.width = (Math.abs(bx - ax) + pad * 2) + 'px';
+  hl.style.height = (Math.abs(by - ay) + pad * 2) + 'px';
+  pg.wrap.appendChild(hl);
+  hl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function setupReverseLocate() {
+  els.pdfInner.addEventListener('click', (e) => {
+    const sel = window.getSelection();
+    if (sel && sel.toString().trim().length >= 2) return;
+    const wrap = e.target.closest('.page-wrap');
+    if (!wrap) return;
+    const pageNum = Number(wrap.dataset.page);
+    const pg = pageWraps[pageNum];
+    if (!pg) return;
+    const box = wrap.getBoundingClientRect();
+    const [px, py] = pg.viewport.convertToPdfPoint(e.clientX - box.left, e.clientY - box.top);
+    const idx = findParagraphAt(pageNum, px, py);
+    if (idx < 0) return;
+    reverseLocate(idx, pg, paragraphs[idx]);
+  });
+}
+
+function findParagraphAt(page, px, py) {
+  let best = -1, bestArea = Infinity, nearest = -1, nearestDy = Infinity;
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i];
+    if (p.page !== page) continue;
+    const r = p.rect;
+    if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) {
+      const area = (r.x1 - r.x0) * (r.y1 - r.y0);
+      if (area < bestArea) { bestArea = area; best = i; }
+    }
+    const cy = (r.y0 + r.y1) / 2;
+    const dy = Math.abs(cy - py);
+    if (dy < nearestDy) { nearestDy = dy; nearest = i; }
+  }
+  if (best >= 0) return best;
+  return nearestDy < 40 ? nearest : -1;
+}
+
+function reverseLocate(idx, pg, para) {
+  const seg = segEls[idx];
+  if (!seg) return;
+  document.querySelectorAll('.seg-active').forEach(e => e.classList.remove('seg-active'));
+  seg.classList.add('seg-active');
+  seg.classList.remove('seg-flash');
+  void seg.offsetWidth;
+  seg.classList.add('seg-flash');
+  seg.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  document.querySelectorAll('.hl').forEach(e => e.remove());
+  const [ax, ay] = pg.viewport.convertToViewportPoint(para.rect.x0, para.rect.y0);
+  const [bx, by] = pg.viewport.convertToViewportPoint(para.rect.x1, para.rect.y1);
+  const pad = 4;
+  const hl = document.createElement('div');
+  hl.className = 'hl';
+  hl.style.left = (Math.min(ax, bx) - pad) + 'px';
+  hl.style.top = (Math.min(ay, by) - pad) + 'px';
+  hl.style.width = (Math.abs(bx - ax) + pad * 2) + 'px';
+  hl.style.height = (Math.abs(by - ay) + pad * 2) + 'px';
+  pg.wrap.appendChild(hl);
+}
+
+function setupSelectionAsk() {
+  els.pdfPane.addEventListener('mouseup', () => {
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : '';
+      if (text.length >= 2 && sel.rangeCount) {
+        selectedText = text;
+        const r = sel.getRangeAt(0).getBoundingClientRect();
+        els.askFloat.style.display = '';
+        els.askFloat.style.left = Math.min(window.innerWidth - 175, Math.max(4, r.left + r.width / 2 - 85)) + 'px';
+        els.askFloat.style.top = Math.max(8, r.top - 42) + 'px';
+      } else {
+        els.askFloat.style.display = 'none';
+      }
+    }, 10);
+  });
+  els.pdfPane.addEventListener('scroll', () => { els.askFloat.style.display = 'none'; });
+  els.askFloatAsk.addEventListener('click', () => {
+    els.askFloat.style.display = 'none';
+    openAskModal(selectedText);
+  });
+  els.askFloatTrans.addEventListener('click', () => {
+    els.askFloat.style.display = 'none';
+    openAskModal(selectedText, 'translate');
+    quickTranslateSelection(selectedText);
+  });
+  els.askClose.addEventListener('click', closeAskModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && els.askModal.style.display !== 'none') closeAskModal();
+  });
+  els.askSend.addEventListener('click', askNano);
+  els.askStop.addEventListener('click', () => askAbort?.abort());
+  els.askInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); askNano(); }
+  });
+  let dragP = null;
+  els.askHead.addEventListener('mousedown', (e) => {
+    if (e.target === els.askClose) return;
+    const box = els.askModal.getBoundingClientRect();
+    dragP = { dx: e.clientX - box.left, dy: e.clientY - box.top };
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragP) return;
+    const x = Math.max(0, Math.min(window.innerWidth - 80, e.clientX - dragP.dx));
+    const y = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragP.dy));
+    els.askModal.style.left = x + 'px';
+    els.askModal.style.top = y + 'px';
+    els.askModal.style.right = 'auto';
+    els.askModal.style.bottom = 'auto';
+  });
+  document.addEventListener('mouseup', () => { dragP = null; });
+}
+
+let askAbort = null;
+let askSession = null;
+
+function openAskModal(text, mode = 'ask') {
+  els.askSel.textContent = text;
+  els.askInput.value = '';
+  els.askModal.style.display = 'flex';
+  if (mode === 'translate') {
+    els.askAnswer.textContent = '翻譯中…';
+    els.askInput.placeholder = '想追問這段內容？輸入問題後按 Enter（直接翻譯無需輸入）';
+    els.askInput.blur();
+  } else {
+    els.askAnswer.textContent = '';
+    els.askInput.placeholder = '想問什麼？（Enter 送出，Shift+Enter 換行；留空＝請 AI 解釋這段文字）';
+    els.askInput.focus();
+  }
+}
+
+function closeAskModal() { askAbort?.abort(); els.askModal.style.display = 'none'; }
+let quickTransGen = 0;
+async function quickTranslateSelection(text) {
+  const gen = ++quickTransGen;
+  els.askAnswer.textContent = '翻譯中…';
+  try {
+    if (!translatorObj) translatorObj = await initTranslator(detectedSource, els.targetLang.value, { isManual: true });
+    const translated = await doTranslate(translatorObj, text);
+    if (gen !== quickTransGen) return;
+    if (els.askModal.style.display === 'none') return;
+    els.askAnswer.textContent = translated;
+  } catch (e) {
+    if (gen === quickTransGen) els.askAnswer.textContent = '翻譯失敗：' + e.message;
+  }
+}
+
+function askSwap(running) {
+  els.askSend.style.display = running ? 'none' : '';
+  els.askStop.style.display = running ? '' : 'none';
+}
+
+function findParagraphByText(snippet) {
+  const norm = s => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const key = norm(snippet).slice(0, 40);
+  if (key.length < 6) return -1;
+  for (let i = 0; i < paragraphs.length; i++) if (norm(paragraphs[i].text).includes(key)) return i;
+  return -1;
+}
+
+const clamp = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : (s || ''));
+
+async function askNano() {
+  if (askAbort) return;
+  if (!('LanguageModel' in self)) { els.askAnswer.textContent = 'Gemini Nano 不可用，無法提問。'; return; }
+  const question = els.askInput.value.trim() || '請用繁體中文解釋這段文字的意思與相關背景。';
+  const snippet = els.askSel.textContent;
+  askAbort = new AbortController();
+  const { signal } = askAbort;
+  askSwap(true);
+  els.askAnswer.textContent = '思考中…';
+  try {
+    askSession = await LanguageModel.create({
+      samplingMode: 'most-predictable',
+      initialPrompts: [{ role: 'system', content: '你是研究助理。使用者會閱讀一篇論文並反白其中一段文字提問。請優先依據提供的「論文摘要」與「前後文」作答，用繁體中文回答；若需補充常識可適度補充並註明。' }],
+    });
+    const parts = [];
+    if (summaryObj) {
+      parts.push('【論文摘要】\n' + `背景：${clamp(summaryObj.background, 220)}\n` + `相關研究：${clamp(summaryObj.relatedWork, 220)}\n` + `亮點：${clamp(summaryObj.highlights, 220)}\n` + `總結：${clamp(summaryObj.conclusion, 220)}`);
+    }
+    const idx = findParagraphByText(snippet);
+    if (idx >= 0) {
+      const ctx = [paragraphs[idx - 1], paragraphs[idx], paragraphs[idx + 1]].filter(Boolean).map(p => p.text).join('\n');
+      parts.push('【反白段落的前後文】\n' + clamp(ctx, 1500));
+    }
+    parts.push('【使用者反白的片段】\n' + clamp(snippet, 1000));
+    parts.push('【問題】\n' + question);
+    const prompt = parts.join('\n\n');
+    const stream = askSession.promptStreaming(prompt, { signal });
+    els.askAnswer.textContent = '';
+    for await (const chunk of stream) {
+      els.askAnswer.textContent += chunk;
+      els.askAnswer.scrollTop = els.askAnswer.scrollHeight;
+    }
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      if (!els.askAnswer.textContent || els.askAnswer.textContent === '思考中…') els.askAnswer.textContent = '（已停止）';
+      else els.askAnswer.textContent += '\n\n（已停止）';
+    } else {
+      els.askAnswer.textContent = '發生錯誤：' + e.message;
+    }
+  } finally {
+    try { askSession?.destroy(); } catch (_) {}
+    askSession = null;
+    askAbort = null;
+    askSwap(false);
+  }
+}
+
+function setupDivider() {
+  let dragging = false;
+  els.divider.addEventListener('mousedown', () => {
+    dragging = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const pct = Math.min(80, Math.max(30, (e.clientX / window.innerWidth) * 100));
+    els.pdfPane.style.flex = `0 0 ${pct}%`;
+  });
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+}
+
+function swapButtons(translating) {
+  els.translateBtn.style.display = translating ? 'none' : '';
+  els.stopBtn.style.display = translating ? '' : 'none';
+}
+function setStatus(msg) { els.statusText.textContent = msg; }
+function setProgress(ratio, label) {
+  setIndeterminate(false);
+  els.progressBar.style.width = `${Math.round(ratio * 100)}%`;
+  els.progressLabel.textContent = label || '';
+}
+function setIndeterminate(on) {
+  if (on) {
+    els.progressBar.classList.add('indeterminate');
+    els.progressBar.style.width = '100%';
+    els.progressLabel.textContent = '處理中...';
+  } else {
+    els.progressBar.classList.remove('indeterminate');
+  }
+}
+function showError(msg) { els.errorBox.textContent = msg; els.errorBox.style.display = ''; }
+function clearError() { els.errorBox.style.display = 'none'; }
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
