@@ -39,6 +39,9 @@ const els = {
   pdfDarkBtn:    document.getElementById('pdfDarkBtn'),
   aiBadge:       document.getElementById('aiBadge'),
   translateBtn:  document.getElementById('translateBtn'),
+  pageSelectionMode: document.getElementById('pageSelectionMode'),
+  pageSelectionInput: document.getElementById('pageSelectionInput'),
+  pageSelectionHint: document.getElementById('pageSelectionHint'),
   stopBtn:       document.getElementById('stopBtn'),
   fontDec:       document.getElementById('fontDec'),
   fontInc:       document.getElementById('fontInc'),
@@ -247,6 +250,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupReverseLocate();
   setupZoom();
   setupKeyboardScroll();
+  setupPageSelection();
 
   els.translateBtn.addEventListener('click', () => startTranslation(true));
   els.stopBtn.addEventListener('click', () => {
@@ -290,6 +294,7 @@ async function openPdf(loadBuffer) {
     detectedSource = await detectSourceLang(paragraphs.slice(0, 5).map(p => p.text).join(' ').slice(0, 1000));
     els.srcLangInfo.textContent = `偵測來源：${detectedSource}`;
     els.translateBtn.disabled = false;
+    els.pageSelectionInput.dispatchEvent(new Event('input')); // validate preselected pages against actual PDF length
     setStatus('PDF 已載入');
     // Requirement 4 — auto start translation
     if (!els.translateBtn.disabled) startTranslation(false);
@@ -1438,12 +1443,65 @@ function refineParagraphs(paras) {
 // (window.VibeTranslate) and shared with the in-page content script (content.js).
 
 // ─── Translation flow ───────────────────────────────────────────────────────────
+function setupPageSelection() {
+  const update = () => {
+    const specific = els.pageSelectionMode.value === 'selected';
+    els.pageSelectionInput.disabled = !specific;
+    if (!specific) {
+      els.pageSelectionInput.setCustomValidity('');
+      els.pageSelectionHint.textContent = '預設翻譯全文';
+      return;
+    }
+    try {
+      if (!pdfDoc) {
+        els.pageSelectionHint.textContent = 'PDF 載入後檢查頁碼';
+        return;
+      }
+      const pages = window.VibePageSelection.parse(els.pageSelectionInput.value, pdfDoc.numPages);
+      els.pageSelectionInput.setCustomValidity('');
+      els.pageSelectionHint.textContent = '已選 ' + pages.size + ' 頁';
+    } catch (error) {
+      els.pageSelectionInput.setCustomValidity(error.message);
+      els.pageSelectionHint.textContent = error.message;
+    }
+  };
+  els.pageSelectionMode.addEventListener('change', update);
+  els.pageSelectionInput.addEventListener('input', update);
+  update();
+}
+
+function selectedTranslationIndices() {
+  if (els.pageSelectionMode.value !== 'selected') {
+    return window.VibePageSelection.selectIndices(paragraphs, null);
+  }
+  const selectedPages = window.VibePageSelection.parse(
+    els.pageSelectionInput.value, pdfDoc?.numPages
+  );
+  return window.VibePageSelection.selectIndices(paragraphs, selectedPages);
+}
+
 async function startTranslation(isManual) {
   if (abortCtrl) return; // already running
+  if (!paragraphs.length) { showError('沒有可翻譯的文字（可能是掃描版 PDF）。'); return; }
+
+  // Validate the page expression BEFORE clearing prior results or creating a
+  // model session, so a typo cannot destroy a completed translation.
+  let selectedIndices;
+  try {
+    selectedIndices = selectedTranslationIndices();
+  } catch (error) {
+    els.pageSelectionInput.setCustomValidity(error.message);
+    els.pageSelectionInput.reportValidity();
+    showError(error.message);
+    return;
+  }
+  els.pageSelectionInput.setCustomValidity('');
+  if (!selectedIndices.length) {
+    showError('所選頁面沒有可翻譯段落');
+    return;
+  }
   clearError();
   els.results.innerHTML = '';
-
-  if (!paragraphs.length) { showError('沒有可翻譯的文字（可能是掃描版 PDF）。'); return; }
 
   abortCtrl = new AbortController();
   const { signal } = abortCtrl;
@@ -1457,8 +1515,9 @@ async function startTranslation(isManual) {
       onStatus: setStatus, onProgress: setProgress, onIndeterminate: setIndeterminate,
     });
 
-    const total = paragraphs.length;
-    const shells = paragraphs.map((p, i) => appendSegment(p, i));
+    const total = selectedIndices.length;
+    const shells = new Array(paragraphs.length);
+    for (const i of selectedIndices) shells[i] = appendSegment(paragraphs[i], i);
     segEls = shells;
     const concurrency = translatorObj.type === 'translator' ? 4 : 1;
     els.aiBadge.textContent = `${engineLabel(translatorObj)} ✓`;
@@ -1473,12 +1532,14 @@ async function startTranslation(isManual) {
     async function worker() {
       while (true) {
         if (signal.aborted) return;
-        const i = nextIdx++;
-        if (i >= total) return;
+        const i = selectedIndices[nextIdx++];
+        if (i === undefined) return;
         try {
           const translated = await doTranslate(translatorObj, paragraphs[i].text);
+          if (signal.aborted) return;
           fillTranslation(shells[i], translated);
         } catch (e) {
+          if (signal.aborted) return;
           fillTranslation(shells[i], `[翻譯失敗: ${e.message}]`, true);
         }
         done++;

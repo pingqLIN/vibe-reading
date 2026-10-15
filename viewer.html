@@ -45,6 +45,19 @@
     </div>
   </div>
 
+  <div id="pageSelectionRow" class="status-row page-selection-row">
+    <label for="pageSelectionMode">翻譯頁面</label>
+    <select id="pageSelectionMode" class="select">
+      <option value="all">全部頁面（預設）</option>
+      <option value="selected">指定頁碼／範圍</option>
+    </select>
+    <label for="pageSelectionInput">頁碼</label>
+    <input id="pageSelectionInput" type="text" class="select"
+           placeholder="1,3,4 或 2-5,6-10" value="1" disabled
+           aria-label="指定 PDF 頁碼及範圍" autocomplete="off" spellcheck="false">
+    <span id="pageSelectionHint" class="page-selection-hint" aria-live="polite">預設翻譯全文</span>
+  </div>
+
   <div id="errorBox" class="error-box" style="display:none"></div>
 
   <main id="split">
@@ -164,6 +177,7 @@
   <script src="lib/ort/ort.wasm.min.js"></script>
   <script src="layout.js"></script>
   <script src="translate-core.js"></script>
+  <script src="page-selection.js"></script>
   <script src="viewer.js"></script>
 </body>
 </html>

@@ -126,6 +126,14 @@ body {
 .btn-stop { background: #5c2b2b; color: #f28b82; }
 .btn-stop:hover { background: #7a3636; }
 
+/* ── PDF selective page translation ───────────────────────── */
+.page-selection-row { gap: 9px; flex-wrap: wrap; }
+.page-selection-row label { font-size: 12px; white-space: nowrap; color: var(--muted); }
+#pageSelectionInput { width: 185px; max-width: 45vw; cursor: text; }
+#pageSelectionInput:disabled { opacity: 0.55; cursor: default; }
+#pageSelectionInput:invalid { border-color: var(--err-fg); }
+.page-selection-hint { font-size: 11px; color: var(--muted); }
+
 /* ── Status row ────────────────────────────────────────────── */
 .status-row {
   display: flex; align-items: center; gap: 16px;
